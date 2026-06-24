@@ -43,6 +43,7 @@ export default function Collect() {
   const addTechniques = useStore((s) => s.addTechniques);
 
   const [keyword, setKeyword] = useState(searchParams.get("keyword") || "");
+  const [showZhihuKey, setShowZhihuKey] = useState(false);
   const [showAgnesKey, setShowAgnesKey] = useState(false);
   const [stages, setStages] = useState<CollectStage[]>(
     STAGE_DEFS.map((s) => ({ ...s, status: "pending" }))
@@ -95,9 +96,10 @@ export default function Collect() {
     if (kw) setKeyword(kw);
   }, [searchParams]);
 
-  // 验证 API 密钥是否已配置（知乎凭证可选：可在 Worker 环境变量中配置）
+  // 验证 API 密钥是否已配置
   const isReady =
     keyword.trim() &&
+    apiConfig.zhihuApiKey.trim() &&
     apiConfig.agnesApiKey.trim();
 
   const updateStage = (idx: number, status: CollectStage["status"], detail?: string) => {
@@ -280,15 +282,44 @@ export default function Collect() {
             </h3>
 
             {/* 知乎搜索（无需凭证） */}
-            <div className="mt-5 rounded-sm border border-moss/30 bg-moss/5 p-4">
-              <div className="flex items-center gap-2">
-                <Check className="h-4 w-4 text-moss" strokeWidth={2} />
+            <div className="mt-5 rounded-sm border border-ink-200/50 p-4">
+              <div className="flex items-center justify-between">
                 <label className="font-mono text-xs uppercase tracking-wider text-ink-700">
-                  知乎搜索（无需 API 凭证）
+                  知乎 Key
                 </label>
+                <a
+                  href="https://developer.zhihu.com/profile"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-mono text-[10px] text-amber-dark hover:underline"
+                >
+                  获取 Key
+                  <ExternalLink className="h-3 w-3" />
+                </a>
               </div>
-              <p className="mt-2 font-serif text-xs leading-relaxed text-ink-500">
-                使用知乎网页搜索 API，通过 Worker 代理转发，无需注册开放平台、无需 client_id/client_secret。只需部署 Worker 代理即可。
+              <div className="relative mt-2">
+                <input
+                  type={showZhihuKey ? "text" : "password"}
+                  value={apiConfig.zhihuApiKey}
+                  onChange={(e) => setApiConfig({ zhihuApiKey: e.target.value })}
+                  placeholder="请输入知乎 Key（z_c0 cookie 或 access_token）"
+                  className={cn(
+                    "input-editorial pr-10",
+                    !apiConfig.zhihuApiKey.trim() && "border-wine/40 focus:border-wine focus:ring-wine/30"
+                  )}
+                />
+                <button
+                  onClick={() => setShowZhihuKey((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700"
+                >
+                  {showZhihuKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              {!apiConfig.zhihuApiKey.trim() && (
+                <p className="mt-1.5 font-mono text-[10px] text-wine">必填项 — 用于知乎搜索鉴权，避免 403 人机验证</p>
+              )}
+              <p className="mt-1.5 font-serif text-[10px] leading-relaxed text-ink-400">
+                获取方式：登录知乎 → F12 → Application → Cookies → zhihu.com → 复制 z_c0 的值；或从知乎开放平台获取 access_token。Key 保存在本地浏览器，不会上传。
               </p>
 
               {/* 搜索范围选择 */}
@@ -443,6 +474,7 @@ export default function Collect() {
     if (url.pathname === '/zhihu-search') {
       try {
         const q = url.searchParams.get('q') || '';
+        const z_c0 = url.searchParams.get('z_c0') || '';
         const offset = parseInt(url.searchParams.get('offset') || '0', 10);
         const limit = parseInt(url.searchParams.get('limit') || '10', 10);
 
@@ -461,13 +493,18 @@ export default function Collect() {
         searchUrl.searchParams.set('offset', String(offset));
         searchUrl.searchParams.set('limit', String(limit));
 
+        const reqHeaders = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': \`https://www.zhihu.com/search?q=\${encodeURIComponent(q)}\`,
+          'Accept': '*/*',
+        };
+        if (z_c0) {
+          reqHeaders['Cookie'] = \`z_c0=\${z_c0}\`;
+        }
+
         const resp = await fetch(searchUrl.toString(), {
           method: 'GET',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': \`https://www.zhihu.com/search?q=\${encodeURIComponent(q)}\`,
-            'Accept': '*/*',
-          },
+          headers: reqHeaders,
         });
 
         if (!resp.ok) {
@@ -569,6 +606,7 @@ export default function Collect() {
     if (url.pathname === '/zhihu-search') {
       try {
         const q = url.searchParams.get('q') || '';
+        const z_c0 = url.searchParams.get('z_c0') || '';
         const offset = parseInt(url.searchParams.get('offset') || '0', 10);
         const limit = parseInt(url.searchParams.get('limit') || '10', 10);
 
@@ -586,13 +624,18 @@ export default function Collect() {
         searchUrl.searchParams.set('offset', String(offset));
         searchUrl.searchParams.set('limit', String(limit));
 
+        const reqHeaders = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': \`https://www.zhihu.com/search?q=\${encodeURIComponent(q)}\`,
+          'Accept': '*/*',
+        };
+        if (z_c0) {
+          reqHeaders['Cookie'] = \`z_c0=\${z_c0}\`;
+        }
+
         const resp = await fetch(searchUrl.toString(), {
           method: 'GET',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': \`https://www.zhihu.com/search?q=\${encodeURIComponent(q)}\`,
-            'Accept': '*/*',
-          },
+          headers: reqHeaders,
         });
 
         if (!resp.ok) {

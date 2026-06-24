@@ -193,6 +193,10 @@ async function searchWeb(
       // 通过 Worker 代理转发知乎网页搜索 API
       const workerUrl = new URL(`${workerBase}/zhihu-search`);
       workerUrl.searchParams.set("q", keyword);
+      // 传入 z_c0 cookie 用于鉴权，避免 403 人机验证
+      if (config.zhihuApiKey?.trim()) {
+        workerUrl.searchParams.set("z_c0", config.zhihuApiKey.trim());
+      }
       workerUrl.searchParams.set("offset", String(offset));
       workerUrl.searchParams.set("limit", String(pageSize));
 
@@ -210,7 +214,7 @@ async function searchWeb(
         }
         if (resp.status === 401 || resp.status === 403) {
           throw new Error(
-            `知乎搜索被拒绝（${resp.status}）：可能需要登录 cookie。\n${detail}`
+            `知乎搜索被拒绝（${resp.status}）：z_c0 cookie 可能已过期或无效。请重新登录知乎，复制最新的 z_c0 cookie。\n${detail}`
           );
         }
         throw new Error(
@@ -262,12 +266,18 @@ async function searchWeb(
 /**
  * 知乎搜索主入口
  *
- * 使用知乎网页搜索 API（通过 Worker 代理转发，无需 OAuth 凭证）
+ * 使用知乎网页搜索 API（通过 Worker 代理转发）
+ * 需要用户提供 z_c0 cookie 用于鉴权，避免 403 人机验证
  */
 export async function searchZhihu(
   keyword: string,
   config: ApiConfig,
   maxPages = 5
 ): Promise<ZhihuPost[]> {
+  if (!config.zhihuApiKey?.trim()) {
+    throw new Error(
+      "未配置知乎 Key。请在配置区填写知乎 z_c0 cookie（登录知乎 → F12 → Application → Cookies → zhihu.com → z_c0）。"
+    );
+  }
   return searchWeb(keyword, config, maxPages);
 }
