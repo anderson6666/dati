@@ -90,8 +90,8 @@ export async function testProxyAvailable(
     return { ok: false, message: "代理地址为空" };
   }
 
-  // 用知乎 API 作为测试目标（不带签名，预期返回 401/422，但 Content-Type 是 JSON）
-  const testTarget = "https://www.zhihu.com/api/v4/search_universal?q=test&offset=0&limit=1";
+  // 用 GitHub API 作为测试目标（稳定，返回 200 纯文本）
+  const testTarget = "https://api.github.com/zen";
   let finalUrl: string;
   if (proxy.includes("thingproxy")) {
     finalUrl = `${proxy}${testTarget}`;

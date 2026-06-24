@@ -504,45 +504,48 @@ export default function Collect() {
                         <li>3. 点击「Edit code」，粘贴下方代码 → 点击 Deploy</li>
                         <li>4. 复制 Worker 地址，在上方输入框填入 <code className="font-mono text-[10px]">https://xxx.workers.dev/?url=</code>（必须带 <code className="font-mono text-[10px]">?url=</code> 后缀）</li>
                       </ol>
-                      <pre className="overflow-x-auto rounded-sm bg-ink-900 p-3 font-mono text-[10px] leading-relaxed text-parchment-300">
+      <pre className="overflow-x-auto rounded-sm bg-ink-900 p-3 font-mono text-[10px] leading-relaxed text-parchment-300">
 {`export default {
   async fetch(request) {
     try {
       const url = new URL(request.url);
       const target = url.searchParams.get('url');
 
-      // 校验 url 参数是否存在
       if (!target) {
         return new Response('Missing url parameter', { status: 400 });
       }
 
-      // 校验目标地址是否为合法的 http/https 网址
       let targetUrl;
       try {
         targetUrl = new URL(target);
       } catch (e) {
-        return new Response('Invalid target URL, must start with http:// or https://', { status: 400 });
+        return new Response('Invalid target URL', { status: 400 });
       }
       if (!['http:', 'https:'].includes(targetUrl.protocol)) {
         return new Response('Only http/https URLs are supported', { status: 400 });
       }
 
-      // 构造请求头，移除 Cloudflare 自带标识头
+      // 构造请求头，移除浏览器和 CF 的标识头
       const headers = new Headers(request.headers);
       headers.delete('host');
       headers.delete('cf-connecting-ip');
       headers.delete('cf-ipcountry');
       headers.delete('cf-ray');
       headers.delete('cf-visitor');
+      // 关键：删除浏览器的 Origin 和 Referer，避免目标网站拒绝
+      headers.delete('origin');
+      headers.delete('referer');
+      // 如果目标是知乎，设置正确的 Referer
+      if (targetUrl.hostname.includes('zhihu.com')) {
+        headers.set('Referer', 'https://www.zhihu.com/search');
+      }
 
-      // 请求目标地址（兼容 GET/POST 等多种请求方法）
       const resp = await fetch(targetUrl, {
         method: request.method,
         headers,
         body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined
       });
 
-      // 添加标准 CORS 跨域头，处理预检请求
       const newHeaders = new Headers(resp.headers);
       newHeaders.set('Access-Control-Allow-Origin', '*');
       newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -559,7 +562,6 @@ export default function Collect() {
       });
 
     } catch (error) {
-      // 捕获所有异常，返回明确错误信息，不再触发 1101
       return new Response(\`Proxy error: \${error.message}\`, {
         status: 500,
         headers: { 'Content-Type': 'text/plain' }
@@ -584,7 +586,7 @@ export default function Collect() {
       try {
         targetUrl = new URL(target);
       } catch (e) {
-        return new Response('Invalid target URL, must start with http:// or https://', { status: 400 });
+        return new Response('Invalid target URL', { status: 400 });
       }
       if (!['http:', 'https:'].includes(targetUrl.protocol)) {
         return new Response('Only http/https URLs are supported', { status: 400 });
@@ -596,6 +598,11 @@ export default function Collect() {
       headers.delete('cf-ipcountry');
       headers.delete('cf-ray');
       headers.delete('cf-visitor');
+      headers.delete('origin');
+      headers.delete('referer');
+      if (targetUrl.hostname.includes('zhihu.com')) {
+        headers.set('Referer', 'https://www.zhihu.com/search');
+      }
 
       const resp = await fetch(targetUrl, {
         method: request.method,
