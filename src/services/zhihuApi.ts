@@ -169,8 +169,13 @@ export async function testProxyAvailable(
  * 鉴权：Authorization: Bearer {AccessKey}
  * Body：{"query": "xxx", "limit": 10, "offset": 0}
  *
- * Worker 端点：/zhihu-official-search?q=xxx&access_key=xxx&offset=0&limit=10&scope=global|site
+ * Worker 端点：/zhihu-official-search?q=xxx&client_secret=xxx&offset=0&limit=10&scope=global|site
  * 前端只发简单 GET 请求，不触发 CORS preflight
+ *
+ * 鉴权流程：
+ * 1. 前端传入 client_secret（API Key，40位十六进制）
+ * 2. Worker 内部先调用 OAuth 端点换取 access_token
+ * 3. 再用 access_token 调用搜索接口
  */
 async function searchOfficial(
   keyword: string,
@@ -186,6 +191,10 @@ async function searchOfficial(
     .replace(/\?url=.*$/, "")
     .replace(/\/$/, "");
 
+  if (!workerBase) {
+    throw new Error("未配置 CORS 代理地址（Worker 地址）。请先填写 Worker 地址后再采集。");
+  }
+
   // 搜索范围：全网或站内
   const scope = config.zhihuSearchType === "站内" ? "site" : "global";
 
@@ -193,39 +202,16 @@ async function searchOfficial(
     const offset = pageNum * pageSize;
 
     try {
-      let resp: Response;
+      // 通过 Worker 转发（Worker 内部处理 OAuth + 搜索）
+      const workerUrl = new URL(`${workerBase}/zhihu-official-search`);
+      workerUrl.searchParams.set("q", keyword);
+      workerUrl.searchParams.set("client_secret", config.zhihuApiKey);
+      workerUrl.searchParams.set("offset", String(offset));
+      workerUrl.searchParams.set("limit", String(pageSize));
+      workerUrl.searchParams.set("scope", scope);
 
-      if (workerBase) {
-        // 通过 Worker 转发（避免 CORS）
-        const workerUrl = new URL(`${workerBase}/zhihu-official-search`);
-        workerUrl.searchParams.set("q", keyword);
-        workerUrl.searchParams.set("access_key", config.zhihuApiKey);
-        workerUrl.searchParams.set("offset", String(offset));
-        workerUrl.searchParams.set("limit", String(pageSize));
-        workerUrl.searchParams.set("scope", scope);
-
-        // 简单 GET 请求，不触发 CORS preflight
-        resp = await fetch(workerUrl.toString(), { method: "GET" });
-      } else {
-        // 直接调用官方 API（可能遇到 CORS，作为回退）
-        const endpoint =
-          scope === "site"
-            ? "https://open.zhihu.com/api/v4/search/site"
-            : "https://open.zhihu.com/api/v4/search/global";
-
-        resp = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.zhihuApiKey}`,
-          },
-          body: JSON.stringify({
-            query: keyword,
-            limit: pageSize,
-            offset: offset,
-          }),
-        });
-      }
+      // 简单 GET 请求，不触发 CORS preflight
+      const resp = await fetch(workerUrl.toString(), { method: "GET" });
 
       if (!resp.ok) {
         const errText = await resp.text().catch(() => "");

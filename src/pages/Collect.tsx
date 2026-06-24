@@ -282,11 +282,11 @@ export default function Collect() {
               <span className="ml-auto font-mono text-[10px] text-wine">* 必填</span>
             </h3>
 
-            {/* 知乎搜索 API Key */}
+            {/* 知乎开放平台 Client Secret */}
             <div className="mt-5 rounded-sm border border-ink-200/50 p-4">
               <div className="flex items-center justify-between">
                 <label className="font-mono text-xs uppercase tracking-wider text-ink-700">
-                  知乎搜索 API Key
+                  知乎 Client Secret
                 </label>
                 <a
                   href="https://developer.zhihu.com/"
@@ -303,7 +303,7 @@ export default function Collect() {
                   type={showZhihuKey ? "text" : "password"}
                   value={apiConfig.zhihuApiKey}
                   onChange={(e) => setApiConfig({ zhihuApiKey: e.target.value })}
-                  placeholder="请输入知乎搜索 API Key"
+                  placeholder="请输入知乎开放平台 Client Secret（40位十六进制）"
                   className={cn(
                     "input-editorial pr-10",
                     !apiConfig.zhihuApiKey.trim() && "border-wine/40 focus:border-wine focus:ring-wine/30"
@@ -473,18 +473,64 @@ export default function Collect() {
     if (url.pathname === '/zhihu-official-search') {
       try {
         const q = url.searchParams.get('q') || '';
-        const accessKey = url.searchParams.get('access_key') || '';
+        const clientSecret = url.searchParams.get('client_secret') || '';
         const offset = parseInt(url.searchParams.get('offset') || '0', 10);
         const limit = parseInt(url.searchParams.get('limit') || '10', 10);
         const scope = url.searchParams.get('scope') || 'global'; // global | site
 
-        if (!q || !accessKey) {
-          return new Response(JSON.stringify({ error: 'Missing q or access_key' }), {
+        if (!q || !clientSecret) {
+          return new Response(JSON.stringify({ error: 'Missing q or client_secret' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json', ...corsHeaders },
           });
         }
 
+        // Step 1: 用 client_secret 通过 OAuth 获取 access_token
+        let accessToken;
+        try {
+          const oauthResp = await fetch('https://open.zhihu.com/api/v4/oauth/access_token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_id: clientSecret,
+              client_secret: clientSecret,
+              grant_type: 'client_credentials',
+            }),
+          });
+
+          if (!oauthResp.ok) {
+            const oauthErr = await oauthResp.text().catch(() => '');
+            return new Response(JSON.stringify({
+              error: \`OAuth 获取 token 失败 (\${oauthResp.status})\`,
+              status: oauthResp.status,
+              responseBody: oauthErr.slice(0, 500),
+            }), {
+              status: oauthResp.status,
+              headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            });
+          }
+
+          const oauthData = await oauthResp.json();
+          accessToken = oauthData.access_token;
+          if (!accessToken) {
+            return new Response(JSON.stringify({
+              error: 'OAuth 响应中无 access_token',
+              responseBody: JSON.stringify(oauthData).slice(0, 500),
+            }), {
+              status: 401,
+              headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            });
+          }
+        } catch (oauthError) {
+          return new Response(JSON.stringify({
+            error: \`OAuth 请求异常: \${oauthError.message}\`,
+          }), {
+            status: 502,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+
+        // Step 2: 用 access_token 调用搜索接口
         const endpoint = scope === 'site'
           ? 'https://open.zhihu.com/api/v4/search/site'
           : 'https://open.zhihu.com/api/v4/search/global';
@@ -493,7 +539,7 @@ export default function Collect() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': \`Bearer \${accessKey}\`,
+            'Authorization': \`Bearer \${accessToken}\`,
           },
           body: JSON.stringify({
             query: q,
@@ -502,11 +548,10 @@ export default function Collect() {
           }),
         });
 
-        // 如果知乎返回错误，包含原始响应内容以便诊断
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
           return new Response(JSON.stringify({
-            error: \`知乎 API 返回 \${resp.status}\`,
+            error: \`知乎搜索 API 返回 \${resp.status}\`,
             status: resp.status,
             endpoint: endpoint,
             responseBody: errText.slice(0, 1000),
@@ -600,21 +645,59 @@ export default function Collect() {
     const url = new URL(request.url);
 
     // 知乎官方开放平台 API（合规商用，无需签名）
+    // 前端传入 client_secret → Worker 内部 OAuth 换 token → 调用搜索
     if (url.pathname === '/zhihu-official-search') {
       try {
         const q = url.searchParams.get('q') || '';
-        const accessKey = url.searchParams.get('access_key') || '';
+        const clientSecret = url.searchParams.get('client_secret') || '';
         const offset = parseInt(url.searchParams.get('offset') || '0', 10);
         const limit = parseInt(url.searchParams.get('limit') || '10', 10);
         const scope = url.searchParams.get('scope') || 'global';
 
-        if (!q || !accessKey) {
-          return new Response(JSON.stringify({ error: 'Missing q or access_key' }), {
+        if (!q || !clientSecret) {
+          return new Response(JSON.stringify({ error: 'Missing q or client_secret' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json', ...corsHeaders },
           });
         }
 
+        // Step 1: 用 client_secret 通过 OAuth 获取 access_token
+        let accessToken;
+        try {
+          const oauthResp = await fetch('https://open.zhihu.com/api/v4/oauth/access_token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_id: clientSecret,
+              client_secret: clientSecret,
+              grant_type: 'client_credentials',
+            }),
+          });
+
+          if (!oauthResp.ok) {
+            const oauthErr = await oauthResp.text().catch(() => '');
+            return new Response(JSON.stringify({
+              error: \`OAuth 获取 token 失败 (\${oauthResp.status})\`,
+              status: oauthResp.status,
+              responseBody: oauthErr.slice(0, 500),
+            }), { status: oauthResp.status, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
+          }
+
+          const oauthData = await oauthResp.json();
+          accessToken = oauthData.access_token;
+          if (!accessToken) {
+            return new Response(JSON.stringify({
+              error: 'OAuth 响应中无 access_token',
+              responseBody: JSON.stringify(oauthData).slice(0, 500),
+            }), { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
+          }
+        } catch (oauthError) {
+          return new Response(JSON.stringify({ error: \`OAuth 请求异常: \${oauthError.message}\` }), {
+            status: 502, headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+
+        // Step 2: 用 access_token 调用搜索接口
         const endpoint = scope === 'site'
           ? 'https://open.zhihu.com/api/v4/search/site'
           : 'https://open.zhihu.com/api/v4/search/global';
@@ -623,7 +706,7 @@ export default function Collect() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': \`Bearer \${accessKey}\`,
+            'Authorization': \`Bearer \${accessToken}\`,
           },
           body: JSON.stringify({ query: q, limit: limit, offset: offset }),
         });
@@ -631,14 +714,11 @@ export default function Collect() {
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
           return new Response(JSON.stringify({
-            error: \`知乎 API 返回 \${resp.status}\`,
+            error: \`知乎搜索 API 返回 \${resp.status}\`,
             status: resp.status,
             endpoint: endpoint,
             responseBody: errText.slice(0, 1000),
-          }), {
-            status: resp.status,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
+          }), { status: resp.status, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
         }
 
         const newHeaders = new Headers(resp.headers);
@@ -647,8 +727,7 @@ export default function Collect() {
         return new Response(resp.body, { status: resp.status, headers: newHeaders });
       } catch (error) {
         return new Response(\`Official search error: \${error.message}\`, {
-          status: 500,
-          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
+          status: 500, headers: { 'Content-Type': 'text/plain', ...corsHeaders },
         });
       }
     }
