@@ -65,9 +65,11 @@ export function normalizeProxyUrl(rawProxy: string): string {
  * 测试代理可用性（包括 CORS preflight 处理）
  *
  * 检测项：
- * 1. 代理地址是否能访问
+ * 1. 代理是否能转发请求到知乎 API
  * 2. 是否正确响应 OPTIONS 预检请求（带自定义头时必需）
- * 3. 是否能转发请求到目标 URL
+ * 3. 是否返回 CORS 头
+ *
+ * 注意：测试用知乎 API 不带签名，预期返回 401/422，但能验证代理可用性
  *
  * @param rawProxy 用户输入的代理地址
  * @returns 检测结果
@@ -88,8 +90,8 @@ export async function testProxyAvailable(
     return { ok: false, message: "代理地址为空" };
   }
 
-  // 构造测试目标 URL（用 httpbin.org 测试，返回 JSON）
-  const testTarget = "https://httpbin.org/get";
+  // 用知乎 API 作为测试目标（不带签名，预期返回 401/422，但 Content-Type 是 JSON）
+  const testTarget = "https://www.zhihu.com/api/v4/search_universal?q=test&offset=0&limit=1";
   let finalUrl: string;
   if (proxy.includes("thingproxy")) {
     finalUrl = `${proxy}${testTarget}`;
@@ -106,7 +108,37 @@ export async function testProxyAvailable(
   } = {};
 
   try {
-    // 第 1 步：测试 OPTIONS 预检请求（模拟带自定义头的场景）
+    // 第 1 步：测试实际 GET 请求（验证代理转发能力）
+    try {
+      const resp = await fetch(finalUrl, {
+        method: "GET",
+      });
+      details.statusCode = resp.status;
+
+      // 知乎不带签名会返回 401/403/422，但只要收到响应就说明代理可用
+      const hasCorsHeader =
+        resp.headers.get("Access-Control-Allow-Origin") !== null;
+
+      if (!hasCorsHeader) {
+        return {
+          ok: false,
+          message: `代理响应缺少 CORS 头（状态 ${resp.status}）。请确保 Worker 代码设置了 Access-Control-Allow-Origin。`,
+          details,
+        };
+      }
+
+      // 收到响应 + 有 CORS 头 = 代理可用
+      details.requestOk = true;
+    } catch (err) {
+      details.requestOk = false;
+      return {
+        ok: false,
+        message: `代理请求失败：${err instanceof Error ? err.message : "网络错误"}。代理可能未部署或地址错误。`,
+        details,
+      };
+    }
+
+    // 第 2 步：测试 OPTIONS 预检请求（验证带自定义头时的 CORS 处理）
     try {
       const preflightResp = await fetch(finalUrl, {
         method: "OPTIONS",
@@ -124,7 +156,7 @@ export async function testProxyAvailable(
       if (!details.preflightOk) {
         return {
           ok: false,
-          message: `预检请求失败（状态 ${preflightResp.status}）。代理未正确处理 OPTIONS 请求，请更新 Worker 代码添加 OPTIONS 处理逻辑。`,
+          message: `预检请求失败（状态 ${preflightResp.status}）。代理未正确处理 OPTIONS 请求，请更新 Worker 代码。`,
           details,
         };
       }
@@ -139,51 +171,27 @@ export async function testProxyAvailable(
       details.preflightOk = false;
       return {
         ok: false,
-        message: `预检请求被阻止：${err instanceof Error ? err.message : "网络错误"}。代理可能未部署或未处理 OPTIONS 请求。`,
+        message: `预检请求被阻止：${err instanceof Error ? err.message : "网络错误"}。代理可能未处理 OPTIONS 请求。`,
         details,
       };
     }
 
-    // 第 2 步：测试实际 GET 请求
-    try {
-      const resp = await fetch(finalUrl, {
-        method: "GET",
-        headers: { "X-Test-Header": "test-value" },
-      });
-      details.statusCode = resp.status;
-      details.requestOk = resp.ok;
-
-      if (!resp.ok) {
-        return {
-          ok: false,
-          message: `代理请求失败（状态 ${resp.status}）。代理可访问但无法正确转发请求。`,
-          details,
-        };
-      }
-
-      // 验证返回内容是否为 JSON（httpbin 返回 JSON）
-      const contentType = resp.headers.get("Content-Type") || "";
-      if (!contentType.includes("application/json")) {
-        return {
-          ok: false,
-          message: `代理返回非 JSON 内容（${contentType}）。可能返回了错误页面。`,
-          details,
-        };
-      }
-
-      return {
-        ok: true,
-        message: "代理可用：预检通过，请求转发正常。",
-        details,
-      };
-    } catch (err) {
-      details.requestOk = false;
-      return {
-        ok: false,
-        message: `实际请求失败：${err instanceof Error ? err.message : "网络错误"}`,
-        details,
-      };
+    // 根据状态码给出不同的成功提示
+    const status = details.statusCode;
+    let message = "代理可用：请求转发正常，CORS 头完整。";
+    if (status === 401 || status === 403) {
+      message = `代理可用（知乎返回 ${status}，需签名）。代理转发正常，CORS 头完整，可正常使用。`;
+    } else if (status === 422) {
+      message = `代理可用（知乎返回 422，签名校验）。代理转发正常，CORS 头完整，可正常使用。`;
+    } else if (status && status >= 200 && status < 300) {
+      message = `代理可用（状态 ${status}）。代理转发正常，CORS 头完整。`;
     }
+
+    return {
+      ok: true,
+      message,
+      details,
+    };
   } catch (err) {
     return {
       ok: false,
