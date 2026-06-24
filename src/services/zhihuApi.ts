@@ -98,7 +98,11 @@ export async function testProxyAvailable(
   } else if (proxy.includes("codetabs")) {
     finalUrl = `${proxy}${testTarget}`;
   } else {
-    finalUrl = `${proxy}${encodeURIComponent(testTarget)}`;
+    // ?url= 格式：只编码 & 和 #，避免二次编码
+    const encodedTargetUrl = testTarget
+      .replace(/&/g, "%26")
+      .replace(/#/g, "%23");
+    finalUrl = `${proxy}${encodedTargetUrl}`;
   }
 
   const details: {
@@ -233,8 +237,12 @@ async function fetchWithProxy(
         // codetabs 格式：直接拼接 URL（不编码）
         finalUrl = `${proxy}${targetUrl}`;
       } else {
-        // 标准格式：编码 URL（含 corsproxy / allorigins / 自定义 Worker）
-        finalUrl = `${proxy}${encodeURIComponent(targetUrl)}`;
+        // ?url= 格式：只编码 & 和 =，避免对已编码的 % 再次编码
+        // 这样 Worker 的 searchParams.get('url') 解码后能得到正确的 URL
+        const encodedTargetUrl = targetUrl
+          .replace(/&/g, "%26")
+          .replace(/#/g, "%23");
+        finalUrl = `${proxy}${encodedTargetUrl}`;
       }
 
       const resp = await fetch(finalUrl, {
