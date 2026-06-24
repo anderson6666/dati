@@ -163,10 +163,10 @@ export async function testProxyAvailable(
  * 通过 Worker 转发调用知乎官方开放平台 API（避免 CORS）
  *
  * 官方 API 端点：
- * - 全网搜索：POST https://open.zhihu.com/v1/global_search
- * - 站内搜索：POST https://open.zhihu.com/v1/search
+ * - 全网搜索：POST https://open.zhihu.com/api/v4/search/global
+ * - 站内搜索：POST https://open.zhihu.com/api/v4/search/site
  *
- * 鉴权：Authorization: Bearer {AccessKey}
+ * 鉴权：OAuth 2.0 client_credentials → Bearer {access_token}
  * Body：{"query": "xxx", "limit": 10, "offset": 0}
  *
  * Worker 端点：/zhihu-official-search?q=xxx&client_secret=xxx&offset=0&limit=10&scope=global|site

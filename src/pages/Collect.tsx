@@ -488,7 +488,7 @@ export default function Collect() {
         // Step 1: 用 client_secret 通过 OAuth 获取 access_token
         let accessToken;
         try {
-          const oauthResp = await fetch('https://open.zhihu.com/api/v4/oauth/access_token', {
+          const oauthResp = await fetch('https://www.zhihu.com/api/v4/oauth/access_token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -664,7 +664,7 @@ export default function Collect() {
         // Step 1: 用 client_secret 通过 OAuth 获取 access_token
         let accessToken;
         try {
-          const oauthResp = await fetch('https://open.zhihu.com/api/v4/oauth/access_token', {
+          const oauthResp = await fetch('https://www.zhihu.com/api/v4/oauth/access_token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
