@@ -99,7 +99,7 @@ export async function processWithAgnes(
       Authorization: `Bearer ${config.agnesApiKey}`,
     },
     body: JSON.stringify({
-      model: "agnes-pro",
+      model: "agnes-2.0-flash",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
