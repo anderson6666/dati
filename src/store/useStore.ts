@@ -62,7 +62,6 @@ export const useStore = create<QuestionBankState>()(
         zhihuSearchType: "全网",
         zhihuApiMode: "official",
         zhihuProxyUrl: "",
-        zhihuDc0: "",
         corsProxyUrl: "https://corsproxy.io/?url=",
         agnesApiKey: "",
         agnesEndpoint: "https://apihub.agnes-ai.com/v1",

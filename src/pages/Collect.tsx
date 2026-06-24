@@ -3,7 +3,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   AlertCircle,
-  Calculator,
   Check,
   Cloud,
   Copy,
@@ -52,7 +51,6 @@ export default function Collect() {
   const [collecting, setCollecting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
-  const [isSignError, setIsSignError] = useState(false);
   const [resultStats, setResultStats] = useState<{
     posts: number;
     questions: number;
@@ -192,14 +190,6 @@ export default function Collect() {
       setCollecting(false);
       const msg = err instanceof Error ? err.message : "采集过程中发生未知错误";
       setError(msg);
-      // 检测知乎签名校验失败（422 / code:4000）
-      const is422 =
-        msg.includes("422") ||
-        msg.includes("4000") ||
-        msg.includes("Unprocessable") ||
-        msg.includes("签名") ||
-        msg.includes("x-zse");
-      setIsSignError(is422);
       // 将进行中的阶段标记为失败
       setStages((prev) =>
         prev.map((s) =>
@@ -372,61 +362,20 @@ export default function Collect() {
                 )}
               </div>
 
-              {/* d_c0 签名状态 */}
-              <div className="mt-3 flex items-center gap-2 border-t border-ink-200/40 pt-3">
-                <Key className="h-3.5 w-3.5 text-ink-400" />
-                <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
-                  d_c0 签名
-                </span>
-                {apiConfig.zhihuDc0?.trim() ? (
-                  <>
-                    <span className="inline-flex items-center gap-1 rounded-sm border border-moss/30 bg-moss/10 px-2 py-0.5 font-mono text-[10px] text-moss">
-                      <Check className="h-3 w-3" />
-                      已配置 · 签名模式
-                    </span>
-                    <span className="font-mono text-[10px] text-ink-400">
-                      {apiConfig.zhihuDc0.slice(0, 8)}…{apiConfig.zhihuDc0.slice(-4)}
-                    </span>
-                    <button
-                      onClick={() => setApiConfig({ zhihuDc0: "" })}
-                      className="ml-auto font-mono text-[10px] text-wine hover:underline"
-                    >
-                      清除
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className="font-mono text-[10px] text-ink-400">
-                      未配置 · 使用官方 API
-                    </span>
-                    <button
-                      onClick={() =>
-                        navigate(`/sign-tool?keyword=${encodeURIComponent(keyword.trim())}`)
-                      }
-                      className="ml-auto inline-flex items-center gap-1 rounded-sm border border-amber/40 bg-amber/10 px-2 py-0.5 font-mono text-[10px] text-amber-dark transition-all hover:bg-amber/20"
-                    >
-                      <Calculator className="h-3 w-3" />
-                      前往配置
-                    </button>
-                  </>
-                )}
-              </div>
-
-              {/* CORS 代理配置（签名模式下必填） */}
-              {apiConfig.zhihuDc0?.trim() && (
-                <div className="mt-3 border-t border-ink-200/40 pt-3">
-                  <label className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-500">
-                    <Globe className="h-3 w-3" />
-                    CORS 代理地址
-                    <span className="ml-auto text-[10px] normal-case tracking-normal text-ink-400">
-                      签名模式必需，输入后请先测试
-                    </span>
-                  </label>
-                  <div className="mt-1.5 flex gap-1.5">
-                    <input
-                        value={apiConfig.corsProxyUrl}
-                        onChange={(e) => handleProxyChange(e.target.value)}
-                        placeholder="必须带 ?url= 后缀，如 https://xxx.workers.dev/?url="
+              {/* CORS 代理配置 */}
+              <div className="mt-3 border-t border-ink-200/40 pt-3">
+                <label className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                  <Globe className="h-3 w-3" />
+                  CORS 代理地址
+                  <span className="ml-auto text-[10px] normal-case tracking-normal text-ink-400">
+                    输入后请先测试
+                  </span>
+                </label>
+                <div className="mt-1.5 flex gap-1.5">
+                  <input
+                      value={apiConfig.corsProxyUrl}
+                      onChange={(e) => handleProxyChange(e.target.value)}
+                      placeholder="必须带 ?url= 后缀，如 https://xxx.workers.dev/?url="
                         className="input-editorial flex-1 font-mono text-xs"
                       />
                     <button
@@ -569,54 +518,6 @@ export default function Collect() {
       }
     }
 
-    // 专用端点：知乎签名搜索（前端只发简单 GET，不触发 preflight）
-    // Worker 内部添加签名头，避免浏览器忽略 Cookie 等头
-    if (url.pathname === '/zhihu-search') {
-      try {
-        const q = url.searchParams.get('q') || '';
-        const d_c0 = url.searchParams.get('d_c0') || '';
-        const xZse93 = url.searchParams.get('x_zse_93') || '101_3_3.0';
-        const xZse96 = url.searchParams.get('x_zse_96') || '';
-        const offset = url.searchParams.get('offset') || '0';
-        const limit = url.searchParams.get('limit') || '10';
-
-        if (!q || !d_c0 || !xZse96) {
-          return new Response(JSON.stringify({ error: 'Missing q, d_c0 or x_zse_96' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
-        }
-
-        const targetUrl = \`https://www.zhihu.com/api/v4/search_universal?q=\${encodeURIComponent(q)}&offset=\${offset}&limit=\${limit}\`;
-
-        const resp = await fetch(targetUrl, {
-          method: 'GET',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.zhihu.com/search',
-            'Content-Type': 'application/json;charset=utf-8',
-            'x-api-version': '3.0.91',
-            'x-zse-93': xZse93,
-            'x-zse-96': xZse96,
-            'Cookie': \`d_c0=\${d_c0}\`,
-          },
-        });
-
-        const newHeaders = new Headers(resp.headers);
-        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
-
-        return new Response(resp.body, {
-          status: resp.status,
-          headers: newHeaders,
-        });
-      } catch (error) {
-        return new Response(\`Search error: \${error.message}\`, {
-          status: 500,
-          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
-        });
-      }
-    }
-
     // 通用代理端点：?url=xxx
     try {
       const target = url.searchParams.get('url');
@@ -720,52 +621,6 @@ export default function Collect() {
         return new Response(resp.body, { status: resp.status, headers: newHeaders });
       } catch (error) {
         return new Response(\`Official search error: \${error.message}\`, {
-          status: 500,
-          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
-        });
-      }
-    }
-
-    if (url.pathname === '/zhihu-search') {
-      try {
-        const q = url.searchParams.get('q') || '';
-        const d_c0 = url.searchParams.get('d_c0') || '';
-        const xZse93 = url.searchParams.get('x_zse_93') || '101_3_3.0';
-        const xZse96 = url.searchParams.get('x_zse_96') || '';
-        const offset = url.searchParams.get('offset') || '0';
-        const limit = url.searchParams.get('limit') || '10';
-
-        if (!q || !d_c0 || !xZse96) {
-          return new Response(JSON.stringify({ error: 'Missing q, d_c0 or x_zse_96' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
-        }
-
-        const targetUrl = \`https://www.zhihu.com/api/v4/search_universal?q=\${encodeURIComponent(q)}&offset=\${offset}&limit=\${limit}\`;
-
-        const resp = await fetch(targetUrl, {
-          method: 'GET',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.zhihu.com/search',
-            'Content-Type': 'application/json;charset=utf-8',
-            'x-api-version': '3.0.91',
-            'x-zse-93': xZse93,
-            'x-zse-96': xZse96,
-            'Cookie': \`d_c0=\${d_c0}\`,
-          },
-        });
-
-        const newHeaders = new Headers(resp.headers);
-        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
-
-        return new Response(resp.body, {
-          status: resp.status,
-          headers: newHeaders,
-        });
-      } catch (error) {
-        return new Response(\`Search error: \${error.message}\`, {
           status: 500,
           headers: { 'Content-Type': 'text/plain', ...corsHeaders },
         });
@@ -887,23 +742,6 @@ export default function Collect() {
               </div>
             </div>
 
-            {/* 签名工具入口 */}
-            <div className="mt-4 rounded-sm border border-amber/30 bg-amber/5 p-4">
-              <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-amber-dark">
-                <AlertCircle className="h-3 w-3" />
-                知乎签名校验失败（422）？
-              </p>
-              <p className="mt-1.5 font-serif text-xs leading-relaxed text-ink-500">
-                知乎 search_universal 接口需要 x-zse-96 签名。使用离线签名工具计算签名参数，复制到 Postman 手动调用。
-              </p>
-              <button
-                onClick={() => navigate("/sign-tool")}
-                className="mt-2 inline-flex items-center gap-1.5 rounded-sm border border-amber/40 bg-amber/10 px-3 py-1.5 font-serif text-xs text-amber-dark transition-all hover:bg-amber/20"
-              >
-                <Calculator className="h-3.5 w-3.5" />
-                打开签名工具
-              </button>
-            </div>
           </div>
         </div>
 
@@ -1047,23 +885,6 @@ export default function Collect() {
                     {error}
                   </p>
                 </div>
-                {isSignError && (
-                  <div className="mt-3 border-t border-wine/20 pt-3">
-                    <p className="font-serif text-xs text-ink-600">
-                      知乎接口需要 <code className="font-mono text-amber-dark">x-zse-96</code> 签名验证。点击下方按钮一键跳转签名工具，自动填入当前关键词。
-                    </p>
-                    <button
-                      onClick={() =>
-                        navigate(`/sign-tool?keyword=${encodeURIComponent(keyword.trim())}`)
-                      }
-                      className="mt-2 inline-flex items-center gap-1.5 rounded-sm border border-amber bg-amber/15 px-4 py-2 font-serif text-sm text-amber-dark transition-all hover:bg-amber/25"
-                    >
-                      <Calculator className="h-4 w-4" />
-                      一键跳转签名工具
-                      <span className="font-mono text-[10px] opacity-60">→</span>
-                    </button>
-                  </div>
-                )}
               </motion.div>
             )}
           </div>

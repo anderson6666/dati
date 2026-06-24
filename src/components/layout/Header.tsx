@@ -10,7 +10,6 @@ const NAV_ITEMS = [
   { path: "/techniques", label: "应试技巧", en: "Techniques" },
   { path: "/wrongbook", label: "错题本", en: "Wrong" },
   { path: "/export", label: "导出中心", en: "Export" },
-  { path: "/sign-tool", label: "签名工具", en: "Sign" },
 ];
 
 export default function Header() {

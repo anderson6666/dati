@@ -9,7 +9,6 @@ import Practice from "@/pages/Practice";
 import Techniques from "@/pages/Techniques";
 import WrongBook from "@/pages/WrongBook";
 import Export from "@/pages/Export";
-import SignTool from "@/pages/SignTool";
 
 export default function App() {
   return (
@@ -25,7 +24,6 @@ export default function App() {
             <Route path="/techniques" element={<Techniques />} />
             <Route path="/wrongbook" element={<WrongBook />} />
             <Route path="/export" element={<Export />} />
-            <Route path="/sign-tool" element={<SignTool />} />
           </Routes>
         </main>
         <Footer />

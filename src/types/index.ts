@@ -57,8 +57,7 @@ export interface ApiConfig {
   zhihuApiKey: string;
   zhihuSearchType: "全网" | "站内"; // 知乎搜索范围：全网搜索 / 站内搜索
   zhihuApiMode: "official" | "proxy"; // 官方开放平台 / 第三方中转 API
-  zhihuProxyUrl: string; // 第三方中转 API 地址（已内置签名逆向）
-  zhihuDc0: string; // 知乎 d_c0 Cookie 值（用于 search_universal 签名调用）
+  zhihuProxyUrl: string; // 第三方中转 API 地址
   corsProxyUrl: string; // CORS 代理地址（用于绕过浏览器跨域限制）
   agnesApiKey: string;
   agnesEndpoint: string;

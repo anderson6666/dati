@@ -3,7 +3,6 @@ import { Link, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
-  Calculator,
   Download,
   GraduationCap,
   Home,
@@ -29,7 +28,6 @@ const MORE_ITEMS = [
   { path: "/techniques", label: "应试技巧", icon: Lightbulb, desc: "秒杀口诀与避坑要点" },
   { path: "/wrongbook", label: "错题本", icon: GraduationCap, desc: "错题回顾与掌握度" },
   { path: "/export", label: "导出中心", icon: Download, desc: "JSON / PDF 导出" },
-  { path: "/sign-tool", label: "签名工具", icon: Calculator, desc: "知乎 x-zse-96 离线签名" },
 ];
 
 export default function BottomNav() {
