@@ -62,7 +62,9 @@ export const useStore = create<QuestionBankState>()(
         zhihuSearchType: "全网",
         zhihuApiMode: "official",
         zhihuProxyUrl: "",
-        corsProxyUrl: "https://corsproxy.io/?url=",
+        // 留空：必须由用户部署自己的 Cloudflare Worker（提供 /zhihu-official-search 端点）
+        // 通用公共代理（corsproxy.io / allorigins / codetabs）不兼容当前的官方 API 调用方式
+        corsProxyUrl: "",
         agnesApiKey: "",
         agnesEndpoint: "https://apihub.agnes-ai.com/v1",
       },
@@ -190,11 +192,18 @@ export const useStore = create<QuestionBankState>()(
       version: 3,
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as { apiConfig?: Partial<ApiConfig> };
-        // v2→v3: 确保 corsProxyUrl 有默认值
-        if (version < 3 && state.apiConfig) {
+        // 旧版本若存了通用 CORS 代理（corsproxy.io / allorigins / codetabs），
+        // 这些地址不兼容当前的 /zhihu-official-search 端点协议，必须清空让用户重新配置 Worker
+        if (state.apiConfig) {
+          const raw = state.apiConfig.corsProxyUrl || "";
+          const isPublicGenericProxy =
+            raw.includes("corsproxy.io") ||
+            raw.includes("allorigins") ||
+            raw.includes("codetabs") ||
+            raw.includes("thingproxy");
           state.apiConfig = {
             ...state.apiConfig,
-            corsProxyUrl: state.apiConfig.corsProxyUrl || "https://corsproxy.io/?url=",
+            corsProxyUrl: isPublicGenericProxy ? "" : raw,
           };
         }
         return state;
