@@ -229,13 +229,21 @@ async function searchOfficial(
 
       if (!resp.ok) {
         const errText = await resp.text().catch(() => "");
+        // 尝试解析 Worker 返回的详细错误信息
+        let detail = errText;
+        try {
+          const errObj = JSON.parse(errText);
+          detail = errObj.error + (errObj.responseBody ? `\n知乎响应: ${errObj.responseBody}` : "");
+        } catch {
+          detail = errText.slice(0, 300);
+        }
         if (resp.status === 401 || resp.status === 403) {
           throw new Error(
-            `知乎官方 API 鉴权失败（${resp.status}）：AccessKey 无效或已过期。请检查知乎开放平台 API Key。`
+            `知乎官方 API 鉴权失败（${resp.status}）：AccessKey 无效或已过期。\n${detail}`
           );
         }
         throw new Error(
-          `知乎官方 API 请求失败 (${resp.status})：${errText.slice(0, 200) || resp.statusText}`
+          `知乎官方 API 请求失败 (${resp.status})：\n${detail}`
         );
       }
 

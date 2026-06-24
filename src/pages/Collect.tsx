@@ -502,6 +502,20 @@ export default function Collect() {
           }),
         });
 
+        // 如果知乎返回错误，包含原始响应内容以便诊断
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => '');
+          return new Response(JSON.stringify({
+            error: \`知乎 API 返回 \${resp.status}\`,
+            status: resp.status,
+            endpoint: endpoint,
+            responseBody: errText.slice(0, 1000),
+          }), {
+            status: resp.status,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+
         const newHeaders = new Headers(resp.headers);
         Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
 
@@ -613,6 +627,19 @@ export default function Collect() {
           },
           body: JSON.stringify({ query: q, limit: limit, offset: offset }),
         });
+
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => '');
+          return new Response(JSON.stringify({
+            error: \`知乎 API 返回 \${resp.status}\`,
+            status: resp.status,
+            endpoint: endpoint,
+            responseBody: errText.slice(0, 1000),
+          }), {
+            status: resp.status,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
 
         const newHeaders = new Headers(resp.headers);
         Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
