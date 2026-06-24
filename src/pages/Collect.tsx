@@ -514,15 +514,63 @@ export default function Collect() {
       'Access-Control-Expose-Headers': '*',
     };
 
-    // 处理 CORS 预检请求（必须最先处理，不 fetch 目标）
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
-    try {
-      const url = new URL(request.url);
-      const target = url.searchParams.get('url');
+    const url = new URL(request.url);
 
+    // 专用端点：知乎搜索（前端只发简单 GET，不触发 preflight）
+    // Worker 内部添加签名头，避免浏览器忽略 Cookie 等头
+    if (url.pathname === '/zhihu-search') {
+      try {
+        const q = url.searchParams.get('q') || '';
+        const d_c0 = url.searchParams.get('d_c0') || '';
+        const xZse93 = url.searchParams.get('x_zse_93') || '101_3_3.0';
+        const xZse96 = url.searchParams.get('x_zse_96') || '';
+        const offset = url.searchParams.get('offset') || '0';
+        const limit = url.searchParams.get('limit') || '10';
+
+        if (!q || !d_c0 || !xZse96) {
+          return new Response(JSON.stringify({ error: 'Missing q, d_c0 or x_zse_96' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+
+        const targetUrl = \`https://www.zhihu.com/api/v4/search_universal?q=\${encodeURIComponent(q)}&offset=\${offset}&limit=\${limit}\`;
+
+        const resp = await fetch(targetUrl, {
+          method: 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.zhihu.com/search',
+            'Content-Type': 'application/json;charset=utf-8',
+            'x-api-version': '3.0.91',
+            'x-zse-93': xZse93,
+            'x-zse-96': xZse96,
+            'Cookie': \`d_c0=\${d_c0}\`,
+          },
+        });
+
+        const newHeaders = new Headers(resp.headers);
+        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
+
+        return new Response(resp.body, {
+          status: resp.status,
+          headers: newHeaders,
+        });
+      } catch (error) {
+        return new Response(\`Search error: \${error.message}\`, {
+          status: 500,
+          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
+        });
+      }
+    }
+
+    // 通用代理端点：?url=xxx
+    try {
+      const target = url.searchParams.get('url');
       if (!target) {
         return new Response('Missing url parameter', { status: 400, headers: corsHeaders });
       }
@@ -537,17 +585,14 @@ export default function Collect() {
         return new Response('Only http/https URLs are supported', { status: 400, headers: corsHeaders });
       }
 
-      // 构造请求头，移除浏览器和 CF 的标识头
       const headers = new Headers(request.headers);
       headers.delete('host');
       headers.delete('cf-connecting-ip');
       headers.delete('cf-ipcountry');
       headers.delete('cf-ray');
       headers.delete('cf-visitor');
-      // 关键：删除浏览器的 Origin 和 Referer，避免目标网站拒绝
       headers.delete('origin');
       headers.delete('referer');
-      // 如果目标是知乎，设置正确的 Referer
       if (targetUrl.hostname.includes('zhihu.com')) {
         headers.set('Referer', 'https://www.zhihu.com/search');
       }
@@ -555,7 +600,7 @@ export default function Collect() {
       const resp = await fetch(targetUrl, {
         method: request.method,
         headers,
-        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined
+        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
       });
 
       const newHeaders = new Headers(resp.headers);
@@ -563,13 +608,12 @@ export default function Collect() {
 
       return new Response(resp.body, {
         status: resp.status,
-        headers: newHeaders
+        headers: newHeaders,
       });
-
     } catch (error) {
       return new Response(\`Proxy error: \${error.message}\`, {
         status: 500,
-        headers: { 'Content-Type': 'text/plain', ...corsHeaders }
+        headers: { 'Content-Type': 'text/plain', ...corsHeaders },
       });
     }
   }
@@ -590,10 +634,56 @@ export default function Collect() {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
-    try {
-      const url = new URL(request.url);
-      const target = url.searchParams.get('url');
+    const url = new URL(request.url);
 
+    if (url.pathname === '/zhihu-search') {
+      try {
+        const q = url.searchParams.get('q') || '';
+        const d_c0 = url.searchParams.get('d_c0') || '';
+        const xZse93 = url.searchParams.get('x_zse_93') || '101_3_3.0';
+        const xZse96 = url.searchParams.get('x_zse_96') || '';
+        const offset = url.searchParams.get('offset') || '0';
+        const limit = url.searchParams.get('limit') || '10';
+
+        if (!q || !d_c0 || !xZse96) {
+          return new Response(JSON.stringify({ error: 'Missing q, d_c0 or x_zse_96' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+
+        const targetUrl = \`https://www.zhihu.com/api/v4/search_universal?q=\${encodeURIComponent(q)}&offset=\${offset}&limit=\${limit}\`;
+
+        const resp = await fetch(targetUrl, {
+          method: 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.zhihu.com/search',
+            'Content-Type': 'application/json;charset=utf-8',
+            'x-api-version': '3.0.91',
+            'x-zse-93': xZse93,
+            'x-zse-96': xZse96,
+            'Cookie': \`d_c0=\${d_c0}\`,
+          },
+        });
+
+        const newHeaders = new Headers(resp.headers);
+        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
+
+        return new Response(resp.body, {
+          status: resp.status,
+          headers: newHeaders,
+        });
+      } catch (error) {
+        return new Response(\`Search error: \${error.message}\`, {
+          status: 500,
+          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
+        });
+      }
+    }
+
+    try {
+      const target = url.searchParams.get('url');
       if (!target) {
         return new Response('Missing url parameter', { status: 400, headers: corsHeaders });
       }
@@ -623,7 +713,7 @@ export default function Collect() {
       const resp = await fetch(targetUrl, {
         method: request.method,
         headers,
-        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined
+        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
       });
 
       const newHeaders = new Headers(resp.headers);
@@ -631,13 +721,12 @@ export default function Collect() {
 
       return new Response(resp.body, {
         status: resp.status,
-        headers: newHeaders
+        headers: newHeaders,
       });
-
     } catch (error) {
       return new Response(\`Proxy error: \${error.message}\`, {
         status: 500,
-        headers: { 'Content-Type': 'text/plain', ...corsHeaders }
+        headers: { 'Content-Type': 'text/plain', ...corsHeaders },
       });
     }
   }

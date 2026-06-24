@@ -290,17 +290,127 @@ async function fetchWithProxy(
 }
 
 /**
+ * 通过 Worker 的 /zhihu-search 端点调用知乎搜索
+ *
+ * 优势：前端只发简单 GET 请求（不带自定义头），完全不触发 CORS preflight
+ * Worker 内部添加签名头（x-zse-93、x-zse-96、Cookie），避免浏览器忽略这些头
+ *
+ * 请求格式：GET https://xxx.workers.dev/zhihu-search?q=xxx&d_c0=xxx&x_zse_93=xxx&x_zse_96=xxx&offset=0&limit=10
+ */
+async function searchViaWorker(
+  keyword: string,
+  config: ApiConfig,
+  maxPages = 5
+): Promise<ZhihuPost[]> {
+  const allPosts: ZhihuPost[] = [];
+  const pageSize = 10;
+
+  // 从 corsProxyUrl 提取 Worker 基础地址
+  // 用户输入可能是 https://xxx.workers.dev/?url= 或 https://xxx.workers.dev/
+  const workerBase = (config.corsProxyUrl || "")
+    .trim()
+    .replace(/\?url=.*$/, "")
+    .replace(/\/$/, "");
+
+  if (!workerBase) {
+    throw new Error("Worker 地址未配置");
+  }
+
+  for (let pageNum = 0; pageNum < maxPages; pageNum++) {
+    const offset = pageNum * pageSize;
+
+    // 计算签名
+    const sign = generateZhihuSign({
+      query: keyword,
+      d_c0: config.zhihuDc0,
+      offset,
+      limit: pageSize,
+    });
+
+    // 构造 Worker URL（简单 GET 请求，不带自定义头）
+    const workerUrl = new URL(`${workerBase}/zhihu-search`);
+    workerUrl.searchParams.set("q", keyword);
+    workerUrl.searchParams.set("d_c0", config.zhihuDc0);
+    workerUrl.searchParams.set("x_zse_93", sign.xZse93);
+    workerUrl.searchParams.set("x_zse_96", sign.xZse96);
+    workerUrl.searchParams.set("offset", String(offset));
+    workerUrl.searchParams.set("limit", String(pageSize));
+
+    try {
+      // 简单 GET 请求，不触发 CORS preflight
+      const resp = await fetch(workerUrl.toString(), {
+        method: "GET",
+      });
+
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => "");
+        if (resp.status === 422) {
+          throw new Error(
+            `知乎签名校验失败（422）：x-zse-96 签名不匹配或 d_c0 已过期。请前往签名工具重新获取 d_c0。`
+          );
+        }
+        throw new Error(
+          `知乎 search_universal 请求失败 (${resp.status})：${errText.slice(0, 200) || resp.statusText}`
+        );
+      }
+
+      const data: SearchUniversalResponse = await resp.json();
+      const items = data.data || [];
+
+      if (items.length === 0) break;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const obj = item.object || {};
+        allPosts.push({
+          id: obj.id || item.id || `zhihu_p${pageNum}_${i}_${Date.now()}`,
+          title: obj.title || item.highlight?.title || "（无标题）",
+          content:
+            obj.content || obj.excerpt || item.highlight?.excerpt || "",
+          author: obj.author?.name || "匿名用户",
+          url: obj.url || "",
+          publishedAt: obj.created_time
+            ? new Date(obj.created_time * 1000)
+                .toISOString()
+                .slice(0, 10)
+            : new Date().toISOString().slice(0, 10),
+          voteupCount: obj.voteup_count || obj.answer_count || 0,
+        });
+      }
+
+      if (items.length < pageSize || data.paging?.is_end) break;
+    } catch (err) {
+      if (pageNum === 0) throw err;
+      break;
+    }
+  }
+
+  return allPosts;
+}
+
+/**
  * 调用知乎 search_universal 全网搜索接口（带 x-zse-96 签名）
  *
- * 接口：GET https://www.zhihu.com/api/v4/search_universal
- * 鉴权：x-zse-93 + x-zse-96 签名 + Cookie d_c0
- * CORS：通过多代理自动回退 + 用户自定义 Worker 代理
+ * 优先级：
+ * 1. 若已配置 Worker 地址 → 使用 /zhihu-search 端点（简单 GET，不触发 preflight）
+ * 2. 否则 → 使用 fetchWithProxy 多代理回退（带签名头，可能触发 preflight）
  */
 async function searchUniversal(
   keyword: string,
   config: ApiConfig,
   maxPages = 5
 ): Promise<ZhihuPost[]> {
+  // 优先使用 Worker 专用端点（避免 CORS preflight）
+  if (config.corsProxyUrl?.trim()) {
+    try {
+      return await searchViaWorker(keyword, config, maxPages);
+    } catch (err) {
+      // 如果 Worker 专用端点失败，回退到多代理模式
+      console.warn("Worker 专用端点失败，回退到多代理模式:", err);
+    }
+  }
+
+  // 回退：多代理模式
   const allPosts: ZhihuPost[] = [];
   const pageSize = 10;
 
