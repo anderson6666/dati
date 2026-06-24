@@ -424,11 +424,11 @@ export default function Collect() {
                   </label>
                   <div className="mt-1.5 flex gap-1.5">
                     <input
-                      value={apiConfig.corsProxyUrl}
-                      onChange={(e) => handleProxyChange(e.target.value)}
-                      placeholder="填入 Cloudflare Worker 地址，如 https://xxx.workers.dev/ （自动适配 ?url=）"
-                      className="input-editorial flex-1 font-mono text-xs"
-                    />
+                        value={apiConfig.corsProxyUrl}
+                        onChange={(e) => handleProxyChange(e.target.value)}
+                        placeholder="必须带 ?url= 后缀，如 https://xxx.workers.dev/?url="
+                        className="input-editorial flex-1 font-mono text-xs"
+                      />
                     <button
                       onClick={handleTestProxy}
                       disabled={proxyTesting || !apiConfig.corsProxyUrl.trim()}
@@ -502,51 +502,69 @@ export default function Collect() {
                         <li>1. 打开 <a href="https://dash.cloudflare.com/?to=/:account/workers" target="_blank" rel="noreferrer" className="text-amber-dark hover:underline">Cloudflare Workers</a>，注册/登录</li>
                         <li>2. 点击「Create Worker」→ Start with Hello World! → 点击 Deploy</li>
                         <li>3. 点击「Edit code」，粘贴下方代码 → 点击 Deploy</li>
-                        <li>4. 复制 Worker 地址，在上方输入框填入 <code className="font-mono text-[10px]">https://xxx.workers.dev/</code> 或 <code className="font-mono text-[10px]">https://xxx.workers.dev/?url=</code>（系统自动适配）</li>
+                        <li>4. 复制 Worker 地址，在上方输入框填入 <code className="font-mono text-[10px]">https://xxx.workers.dev/?url=</code>（必须带 <code className="font-mono text-[10px]">?url=</code> 后缀）</li>
                       </ol>
                       <pre className="overflow-x-auto rounded-sm bg-ink-900 p-3 font-mono text-[10px] leading-relaxed text-parchment-300">
 {`export default {
   async fetch(request) {
-    // 处理 CORS 预检请求（必须，否则浏览器会阻止带自定义头的请求）
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': '*',
-          'Access-Control-Max-Age': '86400',
-        },
+    try {
+      const url = new URL(request.url);
+      const target = url.searchParams.get('url');
+
+      // 校验 url 参数是否存在
+      if (!target) {
+        return new Response('Missing url parameter', { status: 400 });
+      }
+
+      // 校验目标地址是否为合法的 http/https 网址
+      let targetUrl;
+      try {
+        targetUrl = new URL(target);
+      } catch (e) {
+        return new Response('Invalid target URL, must start with http:// or https://', { status: 400 });
+      }
+      if (!['http:', 'https:'].includes(targetUrl.protocol)) {
+        return new Response('Only http/https URLs are supported', { status: 400 });
+      }
+
+      // 构造请求头，移除 Cloudflare 自带标识头
+      const headers = new Headers(request.headers);
+      headers.delete('host');
+      headers.delete('cf-connecting-ip');
+      headers.delete('cf-ipcountry');
+      headers.delete('cf-ray');
+      headers.delete('cf-visitor');
+
+      // 请求目标地址（兼容 GET/POST 等多种请求方法）
+      const resp = await fetch(targetUrl, {
+        method: request.method,
+        headers,
+        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined
+      });
+
+      // 添加标准 CORS 跨域头，处理预检请求
+      const newHeaders = new Headers(resp.headers);
+      newHeaders.set('Access-Control-Allow-Origin', '*');
+      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      newHeaders.set('Access-Control-Allow-Headers', '*');
+      newHeaders.set('Access-Control-Expose-Headers', '*');
+
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: newHeaders });
+      }
+
+      return new Response(resp.body, {
+        status: resp.status,
+        headers: newHeaders
+      });
+
+    } catch (error) {
+      // 捕获所有异常，返回明确错误信息，不再触发 1101
+      return new Response(\`Proxy error: \${error.message}\`, {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain' }
       });
     }
-
-    const url = new URL(request.url);
-    const target = url.searchParams.get('url');
-    if (!target) return new Response('Missing url', { status: 400 });
-
-    // 转发所有请求头到目标
-    const headers = new Headers(request.headers);
-    headers.delete('host');
-    headers.delete('cf-connecting-ip');
-    headers.delete('cf-ipcountry');
-    headers.delete('cf-ray');
-    headers.delete('cf-visitor');
-
-    const resp = await fetch(target, {
-      method: request.method,
-      headers,
-    });
-
-    // 添加 CORS 头
-    const newHeaders = new Headers(resp.headers);
-    newHeaders.set('Access-Control-Allow-Origin', '*');
-    newHeaders.set('Access-Control-Allow-Methods', '*');
-    newHeaders.set('Access-Control-Allow-Headers', '*');
-
-    return new Response(resp.body, {
-      status: resp.status,
-      headers: newHeaders,
-    });
   }
 };`}
                       </pre>
@@ -554,32 +572,58 @@ export default function Collect() {
                         onClick={() => {
                           navigator.clipboard.writeText(`export default {
   async fetch(request) {
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': '*',
-          'Access-Control-Max-Age': '86400',
-        },
+    try {
+      const url = new URL(request.url);
+      const target = url.searchParams.get('url');
+
+      if (!target) {
+        return new Response('Missing url parameter', { status: 400 });
+      }
+
+      let targetUrl;
+      try {
+        targetUrl = new URL(target);
+      } catch (e) {
+        return new Response('Invalid target URL, must start with http:// or https://', { status: 400 });
+      }
+      if (!['http:', 'https:'].includes(targetUrl.protocol)) {
+        return new Response('Only http/https URLs are supported', { status: 400 });
+      }
+
+      const headers = new Headers(request.headers);
+      headers.delete('host');
+      headers.delete('cf-connecting-ip');
+      headers.delete('cf-ipcountry');
+      headers.delete('cf-ray');
+      headers.delete('cf-visitor');
+
+      const resp = await fetch(targetUrl, {
+        method: request.method,
+        headers,
+        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined
+      });
+
+      const newHeaders = new Headers(resp.headers);
+      newHeaders.set('Access-Control-Allow-Origin', '*');
+      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      newHeaders.set('Access-Control-Allow-Headers', '*');
+      newHeaders.set('Access-Control-Expose-Headers', '*');
+
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: newHeaders });
+      }
+
+      return new Response(resp.body, {
+        status: resp.status,
+        headers: newHeaders
+      });
+
+    } catch (error) {
+      return new Response(\`Proxy error: \${error.message}\`, {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain' }
       });
     }
-    const url = new URL(request.url);
-    const target = url.searchParams.get('url');
-    if (!target) return new Response('Missing url', { status: 400 });
-    const headers = new Headers(request.headers);
-    headers.delete('host');
-    headers.delete('cf-connecting-ip');
-    headers.delete('cf-ipcountry');
-    headers.delete('cf-ray');
-    headers.delete('cf-visitor');
-    const resp = await fetch(target, { method: request.method, headers });
-    const newHeaders = new Headers(resp.headers);
-    newHeaders.set('Access-Control-Allow-Origin', '*');
-    newHeaders.set('Access-Control-Allow-Methods', '*');
-    newHeaders.set('Access-Control-Allow-Headers', '*');
-    return new Response(resp.body, { status: resp.status, headers: newHeaders });
   }
 };`);
                         }}
