@@ -390,7 +390,7 @@ export default function Collect() {
                   <input
                     value={apiConfig.corsProxyUrl}
                     onChange={(e) => setApiConfig({ corsProxyUrl: e.target.value })}
-                    placeholder="填入你的 Cloudflare Worker 地址，如 https://my-proxy.workers.dev/?url="
+                    placeholder="填入 Cloudflare Worker 地址，如 https://xxx.workers.dev/ （自动适配 ?url=）"
                     className="input-editorial mt-1.5 font-mono text-xs"
                   />
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -429,7 +429,7 @@ export default function Collect() {
                         <li>1. 打开 <a href="https://dash.cloudflare.com/?to=/:account/workers" target="_blank" rel="noreferrer" className="text-amber-dark hover:underline">Cloudflare Workers</a>，注册/登录</li>
                         <li>2. 点击「Create Worker」→ Start with Hello World! → 点击 Deploy</li>
                         <li>3. 点击「Edit code」，粘贴下方代码 → 点击 Deploy</li>
-                        <li>4. 复制 Worker 地址，在上方输入框填入 <code className="font-mono text-[10px]">https://xxx.workers.dev/?url=xxx</code></li>
+                        <li>4. 复制 Worker 地址，在上方输入框填入 <code className="font-mono text-[10px]">https://xxx.workers.dev/</code> 或 <code className="font-mono text-[10px]">https://xxx.workers.dev/?url=</code>（系统自动适配）</li>
                       </ol>
                       <pre className="overflow-x-auto rounded-sm bg-ink-900 p-3 font-mono text-[10px] leading-relaxed text-parchment-300">
 {`export default {

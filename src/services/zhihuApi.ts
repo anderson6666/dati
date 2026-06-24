@@ -58,8 +58,23 @@ async function fetchWithProxy(
 
   let lastError: Error | null = null;
 
-  for (const proxy of proxies) {
+  for (const rawProxy of proxies) {
     try {
+      // 规范化代理地址：自动适配 ?url= 格式
+      // 用户可能输入 https://xxx.workers.dev/ 或 https://xxx.workers.dev 而未带 ?url=
+      // 此时自动补全为 https://xxx.workers.dev/?url= 以匹配 Worker 代码
+      let proxy = rawProxy;
+      if (
+        proxy &&
+        !proxy.endsWith("=") &&
+        !proxy.includes("?url=") &&
+        !proxy.includes("?quest=") &&
+        !proxy.includes("thingproxy") &&
+        !proxy.includes("codetabs")
+      ) {
+        proxy = proxy.endsWith("/") ? `${proxy}?url=` : `${proxy}/?url=`;
+      }
+
       let finalUrl: string;
       if (!proxy) {
         // 不使用代理，直接请求
@@ -71,7 +86,7 @@ async function fetchWithProxy(
         // codetabs 格式：直接拼接 URL（不编码）
         finalUrl = `${proxy}${targetUrl}`;
       } else {
-        // 标准格式：编码 URL
+        // 标准格式：编码 URL（含 corsproxy / allorigins / 自定义 Worker）
         finalUrl = `${proxy}${encodeURIComponent(targetUrl)}`;
       }
 
