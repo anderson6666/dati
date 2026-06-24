@@ -113,7 +113,6 @@ export default function Collect() {
   const startCollect = async () => {
     if (!isReady) return;
     setError("");
-    setIsSignError(false);
     setCollecting(true);
     setDone(false);
     setResultStats(null);
