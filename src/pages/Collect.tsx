@@ -43,7 +43,6 @@ export default function Collect() {
   const addTechniques = useStore((s) => s.addTechniques);
 
   const [keyword, setKeyword] = useState(searchParams.get("keyword") || "");
-  const [showZhihuKey, setShowZhihuKey] = useState(false);
   const [showAgnesKey, setShowAgnesKey] = useState(false);
   const [stages, setStages] = useState<CollectStage[]>(
     STAGE_DEFS.map((s) => ({ ...s, status: "pending" }))
@@ -120,7 +119,7 @@ export default function Collect() {
     try {
       // 阶段 1+2：知乎搜索 + 素材抓取
       updateStage(0, "active");
-      updateStage(1, "active", `正在通过知乎${apiConfig.zhihuSearchType}搜索（官方 OAuth API）抓取素材…`);
+      updateStage(1, "active", `正在通过知乎${apiConfig.zhihuSearchType}搜索（网页 API）抓取素材…`);
 
       const posts = await searchZhihu(keyword.trim(), apiConfig, 5);
 
@@ -280,65 +279,16 @@ export default function Collect() {
               <span className="ml-auto font-mono text-[10px] text-wine">* 必填</span>
             </h3>
 
-            {/* 知乎开放平台 OAuth 凭证 */}
-            <div className="mt-5 rounded-sm border border-ink-200/50 p-4">
-              <div className="flex items-center justify-between">
+            {/* 知乎搜索（无需凭证） */}
+            <div className="mt-5 rounded-sm border border-moss/30 bg-moss/5 p-4">
+              <div className="flex items-center gap-2">
+                <Check className="h-4 w-4 text-moss" strokeWidth={2} />
                 <label className="font-mono text-xs uppercase tracking-wider text-ink-700">
-                  知乎开放平台凭证
+                  知乎搜索（无需 API 凭证）
                 </label>
-                <a
-                  href="https://developer.zhihu.com/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 font-mono text-[10px] text-amber-dark hover:underline"
-                >
-                  获取凭证
-                  <ExternalLink className="h-3 w-3" />
-                </a>
               </div>
-
-              {/* Client ID */}
-              <label className="mt-3 block font-mono text-[10px] uppercase tracking-wider text-ink-500">
-                Client ID
-              </label>
-              <input
-                type="text"
-                value={apiConfig.zhihuClientId}
-                onChange={(e) => setApiConfig({ zhihuClientId: e.target.value })}
-                placeholder="请输入知乎开放平台 Client ID"
-                className={cn(
-                  "input-editorial mt-1.5",
-                  !apiConfig.zhihuClientId.trim() && "border-wine/40 focus:border-wine focus:ring-wine/30"
-                )}
-              />
-
-              {/* Client Secret */}
-              <label className="mt-3 block font-mono text-[10px] uppercase tracking-wider text-ink-500">
-                Client Secret
-              </label>
-              <div className="relative mt-1.5">
-                <input
-                  type={showZhihuKey ? "text" : "password"}
-                  value={apiConfig.zhihuApiKey}
-                  onChange={(e) => setApiConfig({ zhihuApiKey: e.target.value })}
-                  placeholder="请输入知乎开放平台 Client Secret（40位十六进制）"
-                  className={cn(
-                    "input-editorial pr-10",
-                    !apiConfig.zhihuApiKey.trim() && "border-wine/40 focus:border-wine focus:ring-wine/30"
-                  )}
-                />
-                <button
-                  onClick={() => setShowZhihuKey((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700"
-                >
-                  {showZhihuKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              {(!apiConfig.zhihuClientId.trim() || !apiConfig.zhihuApiKey.trim()) && (
-                <p className="mt-1.5 font-mono text-[10px] text-wine">必填项 — Client ID 和 Client Secret 均需填写，用于 OAuth 换取 access_token</p>
-              )}
-              <p className="mt-1.5 font-serif text-[10px] leading-relaxed text-ink-400">
-                提示：为安全起见，建议在 Cloudflare Worker 设置中配置环境变量 ZHIHU_CLIENT_ID 和 ZHIHU_CLIENT_SECRET（见下方部署指引），此处可留空。
+              <p className="mt-2 font-serif text-xs leading-relaxed text-ink-500">
+                使用知乎网页搜索 API，通过 Worker 代理转发，无需注册开放平台、无需 client_id/client_secret。只需部署 Worker 代理即可。
               </p>
 
               {/* 搜索范围选择 */}
@@ -465,14 +415,13 @@ export default function Collect() {
                     </summary>
                     <div className="mt-3 space-y-2">
                       <p className="font-serif text-xs leading-relaxed text-ink-600">
-                        公共代理不稳定且不转发自定义请求头。部署自己的 Worker 代理（完全免费），确保签名请求头正确转发。
+                        部署自己的 Worker 代理（完全免费），用于转发知乎网页搜索 API 请求，无需任何 API 凭证。
                       </p>
                       <ol className="space-y-1 font-serif text-xs leading-relaxed text-ink-500">
                         <li>1. 打开 <a href="https://dash.cloudflare.com/?to=/:account/workers" target="_blank" rel="noreferrer" className="text-amber-dark hover:underline">Cloudflare Workers</a>，注册/登录</li>
                         <li>2. 点击「Create Worker」→ Start with Hello World! → 点击 Deploy</li>
                         <li>3. 点击「Edit code」，粘贴下方代码 → 点击 Deploy</li>
-                        <li>4. <strong>推荐</strong>：在 Worker 的 Settings → Variables 中添加 Secret 环境变量 <code className="font-mono text-[10px]">ZHIHU_CLIENT_ID</code> 和 <code className="font-mono text-[10px]">ZHIHU_CLIENT_SECRET</code>（安全，无需在前端暴露）</li>
-                        <li>5. 复制 Worker 地址，在上方输入框填入 <code className="font-mono text-[10px]">https://xxx.workers.dev/?url=</code>（必须带 <code className="font-mono text-[10px]">?url=</code> 后缀）</li>
+                        <li>4. 复制 Worker 地址，在上方输入框填入 <code className="font-mono text-[10px]">https://xxx.workers.dev/?url=</code>（必须带 <code className="font-mono text-[10px]">?url=</code> 后缀）</li>
                       </ol>
       <pre className="overflow-x-auto rounded-sm bg-ink-900 p-3 font-mono text-[10px] leading-relaxed text-parchment-300">
 {`export default {
@@ -490,85 +439,35 @@ export default function Collect() {
 
     const url = new URL(request.url);
 
-    // 专用端点：知乎官方开放平台 API（合规商用，无需签名）
-    // 前端只发简单 GET，Worker 内部构造 POST 请求到 open.zhihu.com
-    if (url.pathname === '/zhihu-official-search') {
+    // 知乎网页搜索 API（无需 OAuth 凭证，无需 client_id/client_secret）
+    if (url.pathname === '/zhihu-search') {
       try {
         const q = url.searchParams.get('q') || '';
-        const clientId = env.ZHIHU_CLIENT_ID || url.searchParams.get('client_id') || '';
-        const clientSecret = env.ZHIHU_CLIENT_SECRET || url.searchParams.get('client_secret') || '';
         const offset = parseInt(url.searchParams.get('offset') || '0', 10);
         const limit = parseInt(url.searchParams.get('limit') || '10', 10);
-        const scope = url.searchParams.get('scope') || 'global'; // global | site
 
-        if (!q || !clientId || !clientSecret) {
-          return new Response(JSON.stringify({ error: 'Missing q, client_id or client_secret' }), {
+        if (!q) {
+          return new Response(JSON.stringify({ error: 'Missing q' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json', ...corsHeaders },
           });
         }
 
-        // Step 1: 用 client_id + client_secret 通过 OAuth 获取 access_token
-        let accessToken;
-        try {
-          const oauthResp = await fetch('https://open.zhihu.com/oauth/access_token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              client_id: clientId,
-              client_secret: clientSecret,
-              grant_type: 'client_credentials',
-            }),
-          });
+        // 调用知乎网页搜索 API（zhihu.com 网站自用接口）
+        const searchUrl = new URL('https://www.zhihu.com/api/v4/search_v3');
+        searchUrl.searchParams.set('t', 'general');
+        searchUrl.searchParams.set('q', q);
+        searchUrl.searchParams.set('correction', '1');
+        searchUrl.searchParams.set('offset', String(offset));
+        searchUrl.searchParams.set('limit', String(limit));
 
-          if (!oauthResp.ok) {
-            const oauthErr = await oauthResp.text().catch(() => '');
-            return new Response(JSON.stringify({
-              error: \`OAuth 获取 token 失败 (\${oauthResp.status})\`,
-              status: oauthResp.status,
-              responseBody: oauthErr.slice(0, 500),
-            }), {
-              status: oauthResp.status,
-              headers: { 'Content-Type': 'application/json', ...corsHeaders },
-            });
-          }
-
-          const oauthData = await oauthResp.json();
-          accessToken = oauthData.access_token;
-          if (!accessToken) {
-            return new Response(JSON.stringify({
-              error: 'OAuth 响应中无 access_token',
-              responseBody: JSON.stringify(oauthData).slice(0, 500),
-            }), {
-              status: 401,
-              headers: { 'Content-Type': 'application/json', ...corsHeaders },
-            });
-          }
-        } catch (oauthError) {
-          return new Response(JSON.stringify({
-            error: \`OAuth 请求异常: \${oauthError.message}\`,
-          }), {
-            status: 502,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
-        }
-
-        // Step 2: 用 access_token 调用搜索接口
-        const endpoint = scope === 'site'
-          ? 'https://open.zhihu.com/api/v4/search/site'
-          : 'https://open.zhihu.com/api/v4/search/global';
-
-        const resp = await fetch(endpoint, {
-          method: 'POST',
+        const resp = await fetch(searchUrl.toString(), {
+          method: 'GET',
           headers: {
-            'Content-Type': 'application/json',
-            'Authorization': \`Bearer \${accessToken}\`,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': \`https://www.zhihu.com/search?q=\${encodeURIComponent(q)}\`,
+            'Accept': '*/*',
           },
-          body: JSON.stringify({
-            query: q,
-            limit: limit,
-            offset: offset,
-          }),
         });
 
         if (!resp.ok) {
@@ -576,7 +475,6 @@ export default function Collect() {
           return new Response(JSON.stringify({
             error: \`知乎搜索 API 返回 \${resp.status}\`,
             status: resp.status,
-            endpoint: endpoint,
             responseBody: errText.slice(0, 1000),
           }), {
             status: resp.status,
@@ -592,7 +490,7 @@ export default function Collect() {
           headers: newHeaders,
         });
       } catch (error) {
-        return new Response(\`Official search error: \${error.message}\`, {
+        return new Response(\`Search error: \${error.message}\`, {
           status: 500,
           headers: { 'Content-Type': 'text/plain', ...corsHeaders },
         });
@@ -667,72 +565,34 @@ export default function Collect() {
 
     const url = new URL(request.url);
 
-    // 知乎官方开放平台 API（合规商用，无需签名）
-    // 优先从 Worker 环境变量读取 client_id/client_secret（安全），回退到 query 参数
-    if (url.pathname === '/zhihu-official-search') {
+    // 知乎网页搜索 API（无需 OAuth 凭证，无需 client_id/client_secret）
+    if (url.pathname === '/zhihu-search') {
       try {
         const q = url.searchParams.get('q') || '';
-        const clientId = env.ZHIHU_CLIENT_ID || url.searchParams.get('client_id') || '';
-        const clientSecret = env.ZHIHU_CLIENT_SECRET || url.searchParams.get('client_secret') || '';
         const offset = parseInt(url.searchParams.get('offset') || '0', 10);
         const limit = parseInt(url.searchParams.get('limit') || '10', 10);
-        const scope = url.searchParams.get('scope') || 'global';
 
-        if (!q || !clientId || !clientSecret) {
-          return new Response(JSON.stringify({ error: 'Missing q, client_id or client_secret' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        if (!q) {
+          return new Response(JSON.stringify({ error: 'Missing q' }), {
+            status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders },
           });
         }
 
-        // Step 1: 用 client_id + client_secret 通过 OAuth 获取 access_token
-        let accessToken;
-        try {
-          const oauthResp = await fetch('https://open.zhihu.com/oauth/access_token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              client_id: clientId,
-              client_secret: clientSecret,
-              grant_type: 'client_credentials',
-            }),
-          });
+        // 调用知乎网页搜索 API（zhihu.com 网站自用接口）
+        const searchUrl = new URL('https://www.zhihu.com/api/v4/search_v3');
+        searchUrl.searchParams.set('t', 'general');
+        searchUrl.searchParams.set('q', q);
+        searchUrl.searchParams.set('correction', '1');
+        searchUrl.searchParams.set('offset', String(offset));
+        searchUrl.searchParams.set('limit', String(limit));
 
-          if (!oauthResp.ok) {
-            const oauthErr = await oauthResp.text().catch(() => '');
-            return new Response(JSON.stringify({
-              error: \`OAuth 获取 token 失败 (\${oauthResp.status})\`,
-              status: oauthResp.status,
-              responseBody: oauthErr.slice(0, 500),
-            }), { status: oauthResp.status, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
-          }
-
-          const oauthData = await oauthResp.json();
-          accessToken = oauthData.access_token;
-          if (!accessToken) {
-            return new Response(JSON.stringify({
-              error: 'OAuth 响应中无 access_token',
-              responseBody: JSON.stringify(oauthData).slice(0, 500),
-            }), { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
-          }
-        } catch (oauthError) {
-          return new Response(JSON.stringify({ error: \`OAuth 请求异常: \${oauthError.message}\` }), {
-            status: 502, headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
-        }
-
-        // Step 2: 用 access_token 调用搜索接口
-        const endpoint = scope === 'site'
-          ? 'https://open.zhihu.com/api/v4/search/site'
-          : 'https://open.zhihu.com/api/v4/search/global';
-
-        const resp = await fetch(endpoint, {
-          method: 'POST',
+        const resp = await fetch(searchUrl.toString(), {
+          method: 'GET',
           headers: {
-            'Content-Type': 'application/json',
-            'Authorization': \`Bearer \${accessToken}\`,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': \`https://www.zhihu.com/search?q=\${encodeURIComponent(q)}\`,
+            'Accept': '*/*',
           },
-          body: JSON.stringify({ query: q, limit: limit, offset: offset }),
         });
 
         if (!resp.ok) {
@@ -740,7 +600,6 @@ export default function Collect() {
           return new Response(JSON.stringify({
             error: \`知乎搜索 API 返回 \${resp.status}\`,
             status: resp.status,
-            endpoint: endpoint,
             responseBody: errText.slice(0, 1000),
           }), { status: resp.status, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
         }
@@ -750,7 +609,7 @@ export default function Collect() {
 
         return new Response(resp.body, { status: resp.status, headers: newHeaders });
       } catch (error) {
-        return new Response(\`Official search error: \${error.message}\`, {
+        return new Response(\`Search error: \${error.message}\`, {
           status: 500, headers: { 'Content-Type': 'text/plain', ...corsHeaders },
         });
       }
