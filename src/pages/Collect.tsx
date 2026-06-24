@@ -16,10 +16,11 @@ import {
   Lock,
   Radar,
   Sparkles,
+  X,
 } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import type { CollectStage, Exam } from "@/types";
-import { searchZhihu } from "@/services/zhihuApi";
+import { searchZhihu, testProxyAvailable } from "@/services/zhihuApi";
 import { processWithAgnes } from "@/services/agnesApi";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +58,40 @@ export default function Collect() {
     questions: number;
     techniques: number;
   } | null>(null);
+  // 代理可用性检测状态
+  const [proxyTesting, setProxyTesting] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+
+  // 检测代理可用性（手动触发）
+  const handleTestProxy = async () => {
+    const url = apiConfig.corsProxyUrl.trim();
+    if (!url) {
+      setProxyTestResult({ ok: false, message: "请先输入代理地址" });
+      return;
+    }
+    setProxyTesting(true);
+    setProxyTestResult(null);
+    try {
+      const result = await testProxyAvailable(url);
+      setProxyTestResult({ ok: result.ok, message: result.message });
+    } catch (err) {
+      setProxyTestResult({
+        ok: false,
+        message: err instanceof Error ? err.message : "检测失败",
+      });
+    } finally {
+      setProxyTesting(false);
+    }
+  };
+
+  // 代理地址变化时清除上次检测结果
+  const handleProxyChange = (value: string) => {
+    setApiConfig({ corsProxyUrl: value });
+    setProxyTestResult(null);
+  };
 
   useEffect(() => {
     const kw = searchParams.get("keyword");
@@ -384,15 +419,53 @@ export default function Collect() {
                     <Globe className="h-3 w-3" />
                     CORS 代理地址
                     <span className="ml-auto text-[10px] normal-case tracking-normal text-ink-400">
-                      签名模式必需，自动多代理回退
+                      签名模式必需，输入后请先测试
                     </span>
                   </label>
-                  <input
-                    value={apiConfig.corsProxyUrl}
-                    onChange={(e) => setApiConfig({ corsProxyUrl: e.target.value })}
-                    placeholder="填入 Cloudflare Worker 地址，如 https://xxx.workers.dev/ （自动适配 ?url=）"
-                    className="input-editorial mt-1.5 font-mono text-xs"
-                  />
+                  <div className="mt-1.5 flex gap-1.5">
+                    <input
+                      value={apiConfig.corsProxyUrl}
+                      onChange={(e) => handleProxyChange(e.target.value)}
+                      placeholder="填入 Cloudflare Worker 地址，如 https://xxx.workers.dev/ （自动适配 ?url=）"
+                      className="input-editorial flex-1 font-mono text-xs"
+                    />
+                    <button
+                      onClick={handleTestProxy}
+                      disabled={proxyTesting || !apiConfig.corsProxyUrl.trim()}
+                      className={cn(
+                        "shrink-0 rounded-sm border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider transition-all",
+                        proxyTesting || !apiConfig.corsProxyUrl.trim()
+                          ? "border-ink-200 text-ink-300 cursor-not-allowed"
+                          : "border-amber/40 bg-amber/10 text-amber-dark hover:bg-amber/20"
+                      )}
+                    >
+                      {proxyTesting ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        "测试"
+                      )}
+                    </button>
+                  </div>
+
+                  {/* 代理检测结果 */}
+                  {proxyTestResult && (
+                    <div
+                      className={cn(
+                        "mt-2 flex items-start gap-1.5 rounded-sm border px-2.5 py-1.5 font-serif text-xs",
+                        proxyTestResult.ok
+                          ? "border-moss/30 bg-moss/5 text-moss"
+                          : "border-wine/30 bg-wine/5 text-wine"
+                      )}
+                    >
+                      {proxyTestResult.ok ? (
+                        <Check className="mt-0.5 h-3 w-3 shrink-0" />
+                      ) : (
+                        <X className="mt-0.5 h-3 w-3 shrink-0" />
+                      )}
+                      <span className="leading-relaxed">{proxyTestResult.message}</span>
+                    </div>
+                  )}
+
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {[
                       { label: "自动回退", url: "" },
@@ -402,7 +475,7 @@ export default function Collect() {
                     ].map((proxy) => (
                       <button
                         key={proxy.label}
-                        onClick={() => setApiConfig({ corsProxyUrl: proxy.url })}
+                        onClick={() => handleProxyChange(proxy.url)}
                         className={cn(
                           "rounded-sm border px-2 py-0.5 font-mono text-[10px] transition-all",
                           apiConfig.corsProxyUrl === proxy.url
@@ -434,6 +507,19 @@ export default function Collect() {
                       <pre className="overflow-x-auto rounded-sm bg-ink-900 p-3 font-mono text-[10px] leading-relaxed text-parchment-300">
 {`export default {
   async fetch(request) {
+    // 处理 CORS 预检请求（必须，否则浏览器会阻止带自定义头的请求）
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Max-Age': '86400',
+        },
+      });
+    }
+
     const url = new URL(request.url);
     const target = url.searchParams.get('url');
     if (!target) return new Response('Missing url', { status: 400 });
@@ -446,7 +532,10 @@ export default function Collect() {
     headers.delete('cf-ray');
     headers.delete('cf-visitor');
 
-    const resp = await fetch(target, { method: 'GET', headers });
+    const resp = await fetch(target, {
+      method: request.method,
+      headers,
+    });
 
     // 添加 CORS 头
     const newHeaders = new Headers(resp.headers);
@@ -465,6 +554,17 @@ export default function Collect() {
                         onClick={() => {
                           navigator.clipboard.writeText(`export default {
   async fetch(request) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Max-Age': '86400',
+        },
+      });
+    }
     const url = new URL(request.url);
     const target = url.searchParams.get('url');
     if (!target) return new Response('Missing url', { status: 400 });
@@ -474,7 +574,7 @@ export default function Collect() {
     headers.delete('cf-ipcountry');
     headers.delete('cf-ray');
     headers.delete('cf-visitor');
-    const resp = await fetch(target, { method: 'GET', headers });
+    const resp = await fetch(target, { method: request.method, headers });
     const newHeaders = new Headers(resp.headers);
     newHeaders.set('Access-Control-Allow-Origin', '*');
     newHeaders.set('Access-Control-Allow-Methods', '*');

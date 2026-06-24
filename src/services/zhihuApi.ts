@@ -42,6 +42,157 @@ const PUBLIC_PROXIES = [
 ];
 
 /**
+ * 规范化代理地址：自动适配 ?url= 格式
+ * 用户可能输入 https://xxx.workers.dev/ 或 https://xxx.workers.dev 而未带 ?url=
+ * 此时自动补全为 https://xxx.workers.dev/?url= 以匹配 Worker 代码
+ */
+export function normalizeProxyUrl(rawProxy: string): string {
+  let proxy = rawProxy.trim();
+  if (
+    proxy &&
+    !proxy.endsWith("=") &&
+    !proxy.includes("?url=") &&
+    !proxy.includes("?quest=") &&
+    !proxy.includes("thingproxy") &&
+    !proxy.includes("codetabs")
+  ) {
+    proxy = proxy.endsWith("/") ? `${proxy}?url=` : `${proxy}/?url=`;
+  }
+  return proxy;
+}
+
+/**
+ * 测试代理可用性（包括 CORS preflight 处理）
+ *
+ * 检测项：
+ * 1. 代理地址是否能访问
+ * 2. 是否正确响应 OPTIONS 预检请求（带自定义头时必需）
+ * 3. 是否能转发请求到目标 URL
+ *
+ * @param rawProxy 用户输入的代理地址
+ * @returns 检测结果
+ */
+export async function testProxyAvailable(
+  rawProxy: string
+): Promise<{
+  ok: boolean;
+  message: string;
+  details?: {
+    preflightOk?: boolean;
+    requestOk?: boolean;
+    statusCode?: number;
+  };
+}> {
+  const proxy = normalizeProxyUrl(rawProxy);
+  if (!proxy) {
+    return { ok: false, message: "代理地址为空" };
+  }
+
+  // 构造测试目标 URL（用 httpbin.org 测试，返回 JSON）
+  const testTarget = "https://httpbin.org/get";
+  let finalUrl: string;
+  if (proxy.includes("thingproxy")) {
+    finalUrl = `${proxy}${testTarget}`;
+  } else if (proxy.includes("codetabs")) {
+    finalUrl = `${proxy}${testTarget}`;
+  } else {
+    finalUrl = `${proxy}${encodeURIComponent(testTarget)}`;
+  }
+
+  const details: {
+    preflightOk?: boolean;
+    requestOk?: boolean;
+    statusCode?: number;
+  } = {};
+
+  try {
+    // 第 1 步：测试 OPTIONS 预检请求（模拟带自定义头的场景）
+    try {
+      const preflightResp = await fetch(finalUrl, {
+        method: "OPTIONS",
+        headers: {
+          "X-Test-Header": "test-value",
+          "Content-Type": "application/json",
+        },
+      });
+      details.preflightOk =
+        preflightResp.ok || preflightResp.status === 204 || preflightResp.status === 200;
+
+      const allowOrigin = preflightResp.headers.get("Access-Control-Allow-Origin");
+      const allowHeaders = preflightResp.headers.get("Access-Control-Allow-Headers");
+
+      if (!details.preflightOk) {
+        return {
+          ok: false,
+          message: `预检请求失败（状态 ${preflightResp.status}）。代理未正确处理 OPTIONS 请求，请更新 Worker 代码添加 OPTIONS 处理逻辑。`,
+          details,
+        };
+      }
+      if (!allowOrigin && !allowHeaders) {
+        return {
+          ok: false,
+          message: "预检响应缺少 CORS 头。请确保 Worker 代码返回 Access-Control-Allow-Origin 和 Access-Control-Allow-Headers。",
+          details,
+        };
+      }
+    } catch (err) {
+      details.preflightOk = false;
+      return {
+        ok: false,
+        message: `预检请求被阻止：${err instanceof Error ? err.message : "网络错误"}。代理可能未部署或未处理 OPTIONS 请求。`,
+        details,
+      };
+    }
+
+    // 第 2 步：测试实际 GET 请求
+    try {
+      const resp = await fetch(finalUrl, {
+        method: "GET",
+        headers: { "X-Test-Header": "test-value" },
+      });
+      details.statusCode = resp.status;
+      details.requestOk = resp.ok;
+
+      if (!resp.ok) {
+        return {
+          ok: false,
+          message: `代理请求失败（状态 ${resp.status}）。代理可访问但无法正确转发请求。`,
+          details,
+        };
+      }
+
+      // 验证返回内容是否为 JSON（httpbin 返回 JSON）
+      const contentType = resp.headers.get("Content-Type") || "";
+      if (!contentType.includes("application/json")) {
+        return {
+          ok: false,
+          message: `代理返回非 JSON 内容（${contentType}）。可能返回了错误页面。`,
+          details,
+        };
+      }
+
+      return {
+        ok: true,
+        message: "代理可用：预检通过，请求转发正常。",
+        details,
+      };
+    } catch (err) {
+      details.requestOk = false;
+      return {
+        ok: false,
+        message: `实际请求失败：${err instanceof Error ? err.message : "网络错误"}`,
+        details,
+      };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      message: `代理检测异常：${err instanceof Error ? err.message : "未知错误"}`,
+      details,
+    };
+  }
+}
+/**
  * 通过 CORS 代理发送请求，自动尝试多个代理直到成功
  */
 async function fetchWithProxy(
@@ -60,20 +211,8 @@ async function fetchWithProxy(
 
   for (const rawProxy of proxies) {
     try {
-      // 规范化代理地址：自动适配 ?url= 格式
-      // 用户可能输入 https://xxx.workers.dev/ 或 https://xxx.workers.dev 而未带 ?url=
-      // 此时自动补全为 https://xxx.workers.dev/?url= 以匹配 Worker 代码
-      let proxy = rawProxy;
-      if (
-        proxy &&
-        !proxy.endsWith("=") &&
-        !proxy.includes("?url=") &&
-        !proxy.includes("?quest=") &&
-        !proxy.includes("thingproxy") &&
-        !proxy.includes("codetabs")
-      ) {
-        proxy = proxy.endsWith("/") ? `${proxy}?url=` : `${proxy}/?url=`;
-      }
+      // 规范化代理地址（自动补全 ?url=）
+      const proxy = normalizeProxyUrl(rawProxy);
 
       let finalUrl: string;
       if (!proxy) {
