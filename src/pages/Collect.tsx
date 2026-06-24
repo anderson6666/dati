@@ -31,6 +31,121 @@ const STAGE_DEFS: { key: string; label: string; detail: string }[] = [
   { key: "technique", label: "技巧生成", detail: "提炼秒杀口诀、避坑要点、记忆方法，与题目一一绑定" },
 ];
 
+const WORKER_CODE = `export default {
+  async fetch(request) {
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Expose-Headers': '*',
+    };
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
+
+    const url = new URL(request.url);
+
+    // 专用端点：知乎官方开放平台 API（合规商用，无需签名）
+    // 前端只发简单 GET，Worker 内部构造 POST 请求到 open.zhihu.com
+    if (url.pathname === '/zhihu-official-search') {
+      try {
+        const q = url.searchParams.get('q') || '';
+        const accessKey = url.searchParams.get('access_key') || '';
+        const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+        const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+        const scope = url.searchParams.get('scope') || 'global'; // global | site
+
+        if (!q || !accessKey) {
+          return new Response(JSON.stringify({ error: 'Missing q or access_key' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+
+        const endpoint = scope === 'site'
+          ? 'https://open.zhihu.com/v1/search'
+          : 'https://open.zhihu.com/v1/global_search';
+
+        const resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': \`Bearer \${accessKey}\`,
+          },
+          body: JSON.stringify({
+            query: q,
+            limit: limit,
+            offset: offset,
+          }),
+        });
+
+        const newHeaders = new Headers(resp.headers);
+        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
+
+        return new Response(resp.body, {
+          status: resp.status,
+          headers: newHeaders,
+        });
+      } catch (error) {
+        return new Response(\`Official search error: \${error.message}\`, {
+          status: 500,
+          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
+        });
+      }
+    }
+
+    // 通用代理端点：?url=xxx
+    try {
+      const target = url.searchParams.get('url');
+      if (!target) {
+        return new Response('Missing url parameter', { status: 400, headers: corsHeaders });
+      }
+
+      let targetUrl;
+      try {
+        targetUrl = new URL(target);
+      } catch (e) {
+        return new Response('Invalid target URL', { status: 400, headers: corsHeaders });
+      }
+      if (!['http:', 'https:'].includes(targetUrl.protocol)) {
+        return new Response('Only http/https URLs are supported', { status: 400, headers: corsHeaders });
+      }
+
+      const headers = new Headers(request.headers);
+      headers.delete('host');
+      headers.delete('cf-connecting-ip');
+      headers.delete('cf-ipcountry');
+      headers.delete('cf-ray');
+      headers.delete('cf-visitor');
+      headers.delete('origin');
+      headers.delete('referer');
+      if (targetUrl.hostname.includes('zhihu.com')) {
+        headers.set('Referer', 'https://www.zhihu.com/search');
+      }
+
+      const resp = await fetch(targetUrl, {
+        method: request.method,
+        headers,
+        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
+      });
+
+      const newHeaders = new Headers(resp.headers);
+      Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
+
+      return new Response(resp.body, {
+        status: resp.status,
+        headers: newHeaders,
+      });
+    } catch (error) {
+      return new Response(\`Proxy error: \${error.message}\`, {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain', ...corsHeaders },
+      });
+    }
+  }
+};`;
+
 export default function Collect() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -454,228 +569,11 @@ export default function Collect() {
                         <li>4. 复制 Worker 地址，在上方输入框填入 <code className="font-mono text-[10px]">https://xxx.workers.dev/?url=</code>（必须带 <code className="font-mono text-[10px]">?url=</code> 后缀）</li>
                       </ol>
       <pre className="overflow-x-auto rounded-sm bg-ink-900 p-3 font-mono text-[10px] leading-relaxed text-parchment-300">
-{`export default {
-  async fetch(request) {
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': '*',
-      'Access-Control-Expose-Headers': '*',
-    };
-
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders });
-    }
-
-    const url = new URL(request.url);
-
-    // 专用端点：知乎官方开放平台 API（合规商用，无需签名）
-    // 前端只发简单 GET，Worker 内部构造 POST 请求到 open.zhihu.com
-    if (url.pathname === '/zhihu-official-search') {
-      try {
-        const q = url.searchParams.get('q') || '';
-        const accessKey = url.searchParams.get('access_key') || '';
-        const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-        const limit = parseInt(url.searchParams.get('limit') || '10', 10);
-        const scope = url.searchParams.get('scope') || 'global'; // global | site
-
-        if (!q || !accessKey) {
-          return new Response(JSON.stringify({ error: 'Missing q or access_key' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
-        }
-
-        const endpoint = scope === 'site'
-          ? 'https://open.zhihu.com/v1/search'
-          : 'https://open.zhihu.com/v1/global_search';
-
-        const resp = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': \`Bearer \${accessKey}\`,
-          },
-          body: JSON.stringify({
-            query: q,
-            limit: limit,
-            offset: offset,
-          }),
-        });
-
-        const newHeaders = new Headers(resp.headers);
-        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
-
-        return new Response(resp.body, {
-          status: resp.status,
-          headers: newHeaders,
-        });
-      } catch (error) {
-        return new Response(\`Official search error: \${error.message}\`, {
-          status: 500,
-          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
-        });
-      }
-    }
-
-    // 通用代理端点：?url=xxx
-    try {
-      const target = url.searchParams.get('url');
-      if (!target) {
-        return new Response('Missing url parameter', { status: 400, headers: corsHeaders });
-      }
-
-      let targetUrl;
-      try {
-        targetUrl = new URL(target);
-      } catch (e) {
-        return new Response('Invalid target URL', { status: 400, headers: corsHeaders });
-      }
-      if (!['http:', 'https:'].includes(targetUrl.protocol)) {
-        return new Response('Only http/https URLs are supported', { status: 400, headers: corsHeaders });
-      }
-
-      const headers = new Headers(request.headers);
-      headers.delete('host');
-      headers.delete('cf-connecting-ip');
-      headers.delete('cf-ipcountry');
-      headers.delete('cf-ray');
-      headers.delete('cf-visitor');
-      headers.delete('origin');
-      headers.delete('referer');
-      if (targetUrl.hostname.includes('zhihu.com')) {
-        headers.set('Referer', 'https://www.zhihu.com/search');
-      }
-
-      const resp = await fetch(targetUrl, {
-        method: request.method,
-        headers,
-        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
-      });
-
-      const newHeaders = new Headers(resp.headers);
-      Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
-
-      return new Response(resp.body, {
-        status: resp.status,
-        headers: newHeaders,
-      });
-    } catch (error) {
-      return new Response(\`Proxy error: \${error.message}\`, {
-        status: 500,
-        headers: { 'Content-Type': 'text/plain', ...corsHeaders },
-      });
-    }
-  }
-};`}
+{WORKER_CODE}
                       </pre>
                       <button
                         onClick={() => {
-                          navigator.clipboard.writeText(`export default {
-  async fetch(request) {
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': '*',
-      'Access-Control-Expose-Headers': '*',
-    };
-
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders });
-    }
-
-    const url = new URL(request.url);
-
-    // 知乎官方开放平台 API（合规商用，无需签名）
-    if (url.pathname === '/zhihu-official-search') {
-      try {
-        const q = url.searchParams.get('q') || '';
-        const accessKey = url.searchParams.get('access_key') || '';
-        const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-        const limit = parseInt(url.searchParams.get('limit') || '10', 10);
-        const scope = url.searchParams.get('scope') || 'global';
-
-        if (!q || !accessKey) {
-          return new Response(JSON.stringify({ error: 'Missing q or access_key' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
-        }
-
-        const endpoint = scope === 'site'
-          ? 'https://open.zhihu.com/v1/search'
-          : 'https://open.zhihu.com/v1/global_search';
-
-        const resp = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': \`Bearer \${accessKey}\`,
-          },
-          body: JSON.stringify({ query: q, limit: limit, offset: offset }),
-        });
-
-        const newHeaders = new Headers(resp.headers);
-        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
-
-        return new Response(resp.body, { status: resp.status, headers: newHeaders });
-      } catch (error) {
-        return new Response(\`Official search error: \${error.message}\`, {
-          status: 500,
-          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
-        });
-      }
-    }
-
-    try {
-      const target = url.searchParams.get('url');
-      if (!target) {
-        return new Response('Missing url parameter', { status: 400, headers: corsHeaders });
-      }
-
-      let targetUrl;
-      try {
-        targetUrl = new URL(target);
-      } catch (e) {
-        return new Response('Invalid target URL', { status: 400, headers: corsHeaders });
-      }
-      if (!['http:', 'https:'].includes(targetUrl.protocol)) {
-        return new Response('Only http/https URLs are supported', { status: 400, headers: corsHeaders });
-      }
-
-      const headers = new Headers(request.headers);
-      headers.delete('host');
-      headers.delete('cf-connecting-ip');
-      headers.delete('cf-ipcountry');
-      headers.delete('cf-ray');
-      headers.delete('cf-visitor');
-      headers.delete('origin');
-      headers.delete('referer');
-      if (targetUrl.hostname.includes('zhihu.com')) {
-        headers.set('Referer', 'https://www.zhihu.com/search');
-      }
-
-      const resp = await fetch(targetUrl, {
-        method: request.method,
-        headers,
-        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
-      });
-
-      const newHeaders = new Headers(resp.headers);
-      Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
-
-      return new Response(resp.body, {
-        status: resp.status,
-        headers: newHeaders,
-      });
-    } catch (error) {
-      return new Response(\`Proxy error: \${error.message}\`, {
-        status: 500,
-        headers: { 'Content-Type': 'text/plain', ...corsHeaders },
-      });
-    }
-  }
-};`);
+                          navigator.clipboard.writeText(WORKER_CODE);
                         }}
                         className="inline-flex items-center gap-1 rounded-sm border border-moss/30 bg-moss/10 px-2 py-1 font-mono text-[10px] text-moss transition-all hover:bg-moss/20"
                       >
