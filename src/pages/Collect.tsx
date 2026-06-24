@@ -685,7 +685,6 @@ export default function Collect() {
                     </div>
                   </details>
                 </div>
-              )}
             </div>
 
             {/* Agnes API Key */}
