@@ -160,18 +160,20 @@ export async function testProxyAvailable(
 }
 
 /**
- * 通过 Worker 代理调用知乎网页搜索 API（避免 CORS，无需 OAuth 凭证）
+ * 通过 Worker 代理调用知乎开放平台搜索 API（Bearer Token 鉴权）
  *
- * 网页搜索端点：GET https://www.zhihu.com/api/v4/search_v3?t=general&q=xxx&correction=1&offset=0&limit=20
- * 这是知乎网站自用的搜索接口，返回 JSON，无需 client_id/client_secret。
+ * 官方端点：GET https://developer.zhihu.com/api/v1/content/zhihu_search
+ * 鉴权头：Authorization: Bearer <access_secret> + X-Request-Timestamp: <秒级时间戳>
+ * Query：Query=关键词&Count=10（最大10）
  *
- * Worker 端点：/zhihu-search?q=xxx&offset=0&limit=10
+ * Worker 端点：/zhihu-search?q=xxx&access_secret=xxx&limit=10
  * 前端只发简单 GET 请求，不触发 CORS preflight
+ *
+ * 响应格式：{ Code: 0, Message: "success", Data: { HasMore, Items: [...] } }
  */
-async function searchWeb(
+async function searchOfficial(
   keyword: string,
-  config: ApiConfig,
-  maxPages = 5
+  config: ApiConfig
 ): Promise<ZhihuPost[]> {
   const allPosts: ZhihuPost[] = [];
   const pageSize = 10;
@@ -186,78 +188,60 @@ async function searchWeb(
     throw new Error("未配置 CORS 代理地址（Worker 地址）。请先填写 Worker 地址后再采集。");
   }
 
-  for (let pageNum = 0; pageNum < maxPages; pageNum++) {
-    const offset = pageNum * pageSize;
+  try {
+    // 通过 Worker 代理转发知乎开放平台搜索 API
+    const workerUrl = new URL(`${workerBase}/zhihu-search`);
+    workerUrl.searchParams.set("q", keyword);
+    workerUrl.searchParams.set("access_secret", config.zhihuApiKey.trim());
+    workerUrl.searchParams.set("limit", String(pageSize));
 
-    try {
-      // 通过 Worker 代理转发知乎网页搜索 API
-      const workerUrl = new URL(`${workerBase}/zhihu-search`);
-      workerUrl.searchParams.set("q", keyword);
-      // 传入 z_c0 cookie 用于鉴权，避免 403 人机验证
-      if (config.zhihuApiKey?.trim()) {
-        workerUrl.searchParams.set("z_c0", config.zhihuApiKey.trim());
+    // 简单 GET 请求，不触发 CORS preflight
+    const resp = await fetch(workerUrl.toString(), { method: "GET" });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      let detail = errText;
+      try {
+        const errObj = JSON.parse(errText);
+        detail = errObj.error + (errObj.responseBody ? `\n知乎响应: ${errObj.responseBody}` : "");
+      } catch {
+        detail = errText.slice(0, 300);
       }
-      workerUrl.searchParams.set("offset", String(offset));
-      workerUrl.searchParams.set("limit", String(pageSize));
-
-      // 简单 GET 请求，不触发 CORS preflight
-      const resp = await fetch(workerUrl.toString(), { method: "GET" });
-
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => "");
-        let detail = errText;
-        try {
-          const errObj = JSON.parse(errText);
-          detail = errObj.error + (errObj.responseBody ? `\n知乎响应: ${errObj.responseBody}` : "");
-        } catch {
-          detail = errText.slice(0, 300);
-        }
-        if (resp.status === 401 || resp.status === 403) {
-          throw new Error(
-            `知乎搜索被拒绝（${resp.status}）：z_c0 cookie 可能已过期或无效。请重新登录知乎，复制最新的 z_c0 cookie。\n${detail}`
-          );
-        }
+      if (resp.status === 401 || resp.status === 403) {
         throw new Error(
-          `知乎搜索请求失败 (${resp.status})：\n${detail}`
+          `知乎鉴权失败（${resp.status}）：Access Secret 无效或已过期。请到知乎开放平台重新获取。\n${detail}`
         );
       }
-
-      const data = await resp.json();
-
-      // 知乎网页搜索 API 返回格式：{ data: [{ type, object: {...} }], paging: { is_end } }
-      const items = data.data || data.items || data.results || [];
-
-      if (items.length === 0) break;
-
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        // 网页搜索 API 的每条结果包含 type 和 object 字段
-        const obj = item.object || item;
-        const author = obj.author?.name || obj.author || "匿名用户";
-        const title = obj.title || obj.question?.title || "（无标题）";
-        const content = obj.content || obj.excerpt || obj.summary || "";
-        // 去除 HTML 标签
-        const cleanContent = content.replace(/<[^>]+>/g, "").trim();
-
-        allPosts.push({
-          id: String(obj.id || `zhihu_p${pageNum}_${i}_${Date.now()}`),
-          title,
-          content: cleanContent,
-          author: typeof author === "string" ? author : "匿名用户",
-          url: obj.url || "",
-          publishedAt: obj.created_time
-            ? new Date(obj.created_time * 1000).toISOString().slice(0, 10)
-            : new Date().toISOString().slice(0, 10),
-          voteupCount: obj.voteup_count || obj.vote_count || 0,
-        });
-      }
-
-      // 检查是否还有更多结果
-      if (items.length < pageSize || data.paging?.is_end === true) break;
-    } catch (err) {
-      if (pageNum === 0) throw err;
-      break;
+      throw new Error(
+        `知乎搜索请求失败 (${resp.status})：\n${detail}`
+      );
     }
+
+    const data = await resp.json();
+
+    // 知乎开放平台 API 返回格式：{ Code: 0, Message: "success", Data: { HasMore, Items: [...] } }
+    if (data.Code !== undefined && data.Code !== 0) {
+      throw new Error(
+        `知乎搜索失败：${data.Message || "未知错误"}（Code: ${data.Code}）`
+      );
+    }
+
+    const items = data.Data?.Items || data.data?.items || [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      allPosts.push({
+        id: String(item.ContentID || `zhihu_${i}_${Date.now()}`),
+        title: item.Title || "（无标题）",
+        content: item.ContentText || item.content || "",
+        author: item.AuthorName || item.author || "匿名用户",
+        url: item.Url || item.url || "",
+        publishedAt: new Date().toISOString().slice(0, 10),
+        voteupCount: item.VoteUpCount || item.voteup_count || 0,
+      });
+    }
+  } catch (err) {
+    throw err;
   }
 
   return allPosts;
@@ -266,18 +250,16 @@ async function searchWeb(
 /**
  * 知乎搜索主入口
  *
- * 使用知乎网页搜索 API（通过 Worker 代理转发）
- * 需要用户提供 z_c0 cookie 用于鉴权，避免 403 人机验证
+ * 使用知乎开放平台搜索 API（Bearer Token 鉴权，通过 Worker 代理转发）
  */
 export async function searchZhihu(
   keyword: string,
-  config: ApiConfig,
-  maxPages = 5
+  config: ApiConfig
 ): Promise<ZhihuPost[]> {
   if (!config.zhihuApiKey?.trim()) {
     throw new Error(
-      "未配置知乎 Key。请在配置区填写知乎 z_c0 cookie（登录知乎 → F12 → Application → Cookies → zhihu.com → z_c0）。"
+      "未配置知乎 Access Secret。请在配置区填写知乎开放平台 Access Secret。"
     );
   }
-  return searchWeb(keyword, config, maxPages);
+  return searchOfficial(keyword, config);
 }

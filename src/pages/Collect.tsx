@@ -121,9 +121,9 @@ export default function Collect() {
     try {
       // 阶段 1+2：知乎搜索 + 素材抓取
       updateStage(0, "active");
-      updateStage(1, "active", `正在通过知乎${apiConfig.zhihuSearchType}搜索（网页 API）抓取素材…`);
+      updateStage(1, "active", `正在通过知乎开放平台搜索 API 抓取素材…`);
 
-      const posts = await searchZhihu(keyword.trim(), apiConfig, 5);
+      const posts = await searchZhihu(keyword.trim(), apiConfig);
 
       updateStage(0, "done", `知乎${apiConfig.zhihuSearchType}搜索完成，匹配 ${posts.length} 条素材`);
       updateStage(1, "done", `成功抓取 ${posts.length} 条帖子正文与经验内容`);
@@ -285,7 +285,7 @@ export default function Collect() {
             <div className="mt-5 rounded-sm border border-ink-200/50 p-4">
               <div className="flex items-center justify-between">
                 <label className="font-mono text-xs uppercase tracking-wider text-ink-700">
-                  知乎 Key
+                  知乎 Access Secret
                 </label>
                 <a
                   href="https://developer.zhihu.com/profile"
@@ -302,7 +302,7 @@ export default function Collect() {
                   type={showZhihuKey ? "text" : "password"}
                   value={apiConfig.zhihuApiKey}
                   onChange={(e) => setApiConfig({ zhihuApiKey: e.target.value })}
-                  placeholder="请输入知乎 Key（z_c0 cookie 或 access_token）"
+                  placeholder="请输入知乎开放平台 Access Secret"
                   className={cn(
                     "input-editorial pr-10",
                     !apiConfig.zhihuApiKey.trim() && "border-wine/40 focus:border-wine focus:ring-wine/30"
@@ -316,10 +316,10 @@ export default function Collect() {
                 </button>
               </div>
               {!apiConfig.zhihuApiKey.trim() && (
-                <p className="mt-1.5 font-mono text-[10px] text-wine">必填项 — 用于知乎搜索鉴权，避免 403 人机验证</p>
+                <p className="mt-1.5 font-mono text-[10px] text-wine">必填项 — 用于知乎开放平台 API 鉴权（Bearer Token）</p>
               )}
               <p className="mt-1.5 font-serif text-[10px] leading-relaxed text-ink-400">
-                获取方式：登录知乎 → F12 → Application → Cookies → zhihu.com → 复制 z_c0 的值；或从知乎开放平台获取 access_token。Key 保存在本地浏览器，不会上传。
+                获取方式：登录知乎开放平台 → 个人中心 → 复制 Access Secret。Key 保存在本地浏览器，不会上传。
               </p>
 
               {/* 搜索范围选择 */}
@@ -446,7 +446,7 @@ export default function Collect() {
                     </summary>
                     <div className="mt-3 space-y-2">
                       <p className="font-serif text-xs leading-relaxed text-ink-600">
-                        部署自己的 Worker 代理（完全免费），用于转发知乎网页搜索 API 请求，无需任何 API 凭证。
+                        部署自己的 Worker 代理（完全免费），用于转发知乎开放平台搜索 API 请求。
                       </p>
                       <ol className="space-y-1 font-serif text-xs leading-relaxed text-ink-500">
                         <li>1. 打开 <a href="https://dash.cloudflare.com/?to=/:account/workers" target="_blank" rel="noreferrer" className="text-amber-dark hover:underline">Cloudflare Workers</a>，注册/登录</li>
@@ -470,41 +470,34 @@ export default function Collect() {
 
     const url = new URL(request.url);
 
-    // 知乎网页搜索 API（无需 OAuth 凭证，无需 client_id/client_secret）
+    // 知乎开放平台搜索 API（Bearer Token 鉴权）
     if (url.pathname === '/zhihu-search') {
       try {
         const q = url.searchParams.get('q') || '';
-        const z_c0 = url.searchParams.get('z_c0') || '';
-        const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+        const accessSecret = url.searchParams.get('access_secret') || '';
         const limit = parseInt(url.searchParams.get('limit') || '10', 10);
 
-        if (!q) {
-          return new Response(JSON.stringify({ error: 'Missing q' }), {
+        if (!q || !accessSecret) {
+          return new Response(JSON.stringify({ error: 'Missing q or access_secret' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json', ...corsHeaders },
           });
         }
 
-        // 调用知乎网页搜索 API（zhihu.com 网站自用接口）
-        const searchUrl = new URL('https://www.zhihu.com/api/v4/search_v3');
-        searchUrl.searchParams.set('t', 'general');
-        searchUrl.searchParams.set('q', q);
-        searchUrl.searchParams.set('correction', '1');
-        searchUrl.searchParams.set('offset', String(offset));
-        searchUrl.searchParams.set('limit', String(limit));
+        // 调用知乎开放平台搜索 API
+        const searchUrl = new URL('https://developer.zhihu.com/api/v1/content/zhihu_search');
+        searchUrl.searchParams.set('Query', q);
+        searchUrl.searchParams.set('Count', String(Math.min(limit, 10)));
 
-        const reqHeaders = {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Referer': \`https://www.zhihu.com/search?q=\${encodeURIComponent(q)}\`,
-          'Accept': '*/*',
-        };
-        if (z_c0) {
-          reqHeaders['Cookie'] = \`z_c0=\${z_c0}\`;
-        }
+        const timestamp = Math.floor(Date.now() / 1000);
 
         const resp = await fetch(searchUrl.toString(), {
           method: 'GET',
-          headers: reqHeaders,
+          headers: {
+            'Authorization': \`Bearer \${accessSecret}\`,
+            'X-Request-Timestamp': String(timestamp),
+            'Content-Type': 'application/json',
+          },
         });
 
         if (!resp.ok) {
@@ -602,40 +595,33 @@ export default function Collect() {
 
     const url = new URL(request.url);
 
-    // 知乎网页搜索 API（无需 OAuth 凭证，无需 client_id/client_secret）
+    // 知乎开放平台搜索 API（Bearer Token 鉴权）
     if (url.pathname === '/zhihu-search') {
       try {
         const q = url.searchParams.get('q') || '';
-        const z_c0 = url.searchParams.get('z_c0') || '';
-        const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+        const accessSecret = url.searchParams.get('access_secret') || '';
         const limit = parseInt(url.searchParams.get('limit') || '10', 10);
 
-        if (!q) {
-          return new Response(JSON.stringify({ error: 'Missing q' }), {
+        if (!q || !accessSecret) {
+          return new Response(JSON.stringify({ error: 'Missing q or access_secret' }), {
             status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders },
           });
         }
 
-        // 调用知乎网页搜索 API（zhihu.com 网站自用接口）
-        const searchUrl = new URL('https://www.zhihu.com/api/v4/search_v3');
-        searchUrl.searchParams.set('t', 'general');
-        searchUrl.searchParams.set('q', q);
-        searchUrl.searchParams.set('correction', '1');
-        searchUrl.searchParams.set('offset', String(offset));
-        searchUrl.searchParams.set('limit', String(limit));
+        // 调用知乎开放平台搜索 API
+        const searchUrl = new URL('https://developer.zhihu.com/api/v1/content/zhihu_search');
+        searchUrl.searchParams.set('Query', q);
+        searchUrl.searchParams.set('Count', String(Math.min(limit, 10)));
 
-        const reqHeaders = {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Referer': \`https://www.zhihu.com/search?q=\${encodeURIComponent(q)}\`,
-          'Accept': '*/*',
-        };
-        if (z_c0) {
-          reqHeaders['Cookie'] = \`z_c0=\${z_c0}\`;
-        }
+        const timestamp = Math.floor(Date.now() / 1000);
 
         const resp = await fetch(searchUrl.toString(), {
           method: 'GET',
-          headers: reqHeaders,
+          headers: {
+            'Authorization': \`Bearer \${accessSecret}\`,
+            'X-Request-Timestamp': String(timestamp),
+            'Content-Type': 'application/json',
+          },
         });
 
         if (!resp.ok) {
