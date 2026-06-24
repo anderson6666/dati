@@ -124,7 +124,7 @@ export default function Collect() {
     try {
       // 阶段 1+2：知乎搜索 + 素材抓取
       updateStage(0, "active");
-      const searchMode = apiConfig.zhihuDc0?.trim() ? "签名模式" : "官方 API";
+      const searchMode = apiConfig.zhihuApiKey?.trim() ? "官方 API" : "签名模式";
       updateStage(1, "active", `正在通过知乎${apiConfig.zhihuSearchType}搜索（${searchMode}）抓取素材…`);
 
       const posts = await searchZhihu(keyword.trim(), apiConfig, 5);
@@ -520,7 +520,56 @@ export default function Collect() {
 
     const url = new URL(request.url);
 
-    // 专用端点：知乎搜索（前端只发简单 GET，不触发 preflight）
+    // 专用端点：知乎官方开放平台 API（合规商用，无需签名）
+    // 前端只发简单 GET，Worker 内部构造 POST 请求到 open.zhihu.com
+    if (url.pathname === '/zhihu-official-search') {
+      try {
+        const q = url.searchParams.get('q') || '';
+        const accessKey = url.searchParams.get('access_key') || '';
+        const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+        const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+        const scope = url.searchParams.get('scope') || 'global'; // global | site
+
+        if (!q || !accessKey) {
+          return new Response(JSON.stringify({ error: 'Missing q or access_key' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+
+        const endpoint = scope === 'site'
+          ? 'https://open.zhihu.com/v1/search'
+          : 'https://open.zhihu.com/v1/global_search';
+
+        const resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': \`Bearer \${accessKey}\`,
+          },
+          body: JSON.stringify({
+            query: q,
+            limit: limit,
+            offset: offset,
+          }),
+        });
+
+        const newHeaders = new Headers(resp.headers);
+        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
+
+        return new Response(resp.body, {
+          status: resp.status,
+          headers: newHeaders,
+        });
+      } catch (error) {
+        return new Response(\`Official search error: \${error.message}\`, {
+          status: 500,
+          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
+        });
+      }
+    }
+
+    // 专用端点：知乎签名搜索（前端只发简单 GET，不触发 preflight）
     // Worker 内部添加签名头，避免浏览器忽略 Cookie 等头
     if (url.pathname === '/zhihu-search') {
       try {
@@ -635,6 +684,47 @@ export default function Collect() {
     }
 
     const url = new URL(request.url);
+
+    // 知乎官方开放平台 API（合规商用，无需签名）
+    if (url.pathname === '/zhihu-official-search') {
+      try {
+        const q = url.searchParams.get('q') || '';
+        const accessKey = url.searchParams.get('access_key') || '';
+        const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+        const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+        const scope = url.searchParams.get('scope') || 'global';
+
+        if (!q || !accessKey) {
+          return new Response(JSON.stringify({ error: 'Missing q or access_key' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+
+        const endpoint = scope === 'site'
+          ? 'https://open.zhihu.com/v1/search'
+          : 'https://open.zhihu.com/v1/global_search';
+
+        const resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': \`Bearer \${accessKey}\`,
+          },
+          body: JSON.stringify({ query: q, limit: limit, offset: offset }),
+        });
+
+        const newHeaders = new Headers(resp.headers);
+        Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
+
+        return new Response(resp.body, { status: resp.status, headers: newHeaders });
+      } catch (error) {
+        return new Response(\`Official search error: \${error.message}\`, {
+          status: 500,
+          headers: { 'Content-Type': 'text/plain', ...corsHeaders },
+        });
+      }
+    }
 
     if (url.pathname === '/zhihu-search') {
       try {

@@ -483,46 +483,96 @@ async function searchUniversal(
  * 接口：POST https://open.zhihu.com/openapi/v1/search/global
  * 鉴权：Authorization: Bearer {AccessKey}
  */
+/**
+ * 通过 Worker 转发调用知乎官方开放平台 API（避免 CORS）
+ *
+ * 官方 API 端点：
+ * - 全网搜索：POST https://open.zhihu.com/v1/global_search
+ * - 站内搜索：POST https://open.zhihu.com/v1/search
+ *
+ * 鉴权：Authorization: Bearer {AccessKey}
+ * Body：{"query": "xxx", "limit": 10, "offset": 0}
+ *
+ * Worker 端点：/zhihu-official-search?q=xxx&access_key=xxx&offset=0&limit=10&scope=global|site
+ * 前端只发简单 GET 请求，不触发 CORS preflight
+ */
 async function searchOfficial(
   keyword: string,
   config: ApiConfig,
   maxPages = 5
 ): Promise<ZhihuPost[]> {
   const allPosts: ZhihuPost[] = [];
-  const endpoint = "https://open.zhihu.com/openapi/v1/search/global";
-  const pageSize = 20;
+  const pageSize = 10;
 
-  for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+  // 从 corsProxyUrl 提取 Worker 基础地址
+  const workerBase = (config.corsProxyUrl || "")
+    .trim()
+    .replace(/\?url=.*$/, "")
+    .replace(/\/$/, "");
+
+  // 搜索范围：全网或站内
+  const scope = config.zhihuSearchType === "站内" ? "site" : "global";
+
+  for (let pageNum = 0; pageNum < maxPages; pageNum++) {
+    const offset = pageNum * pageSize;
+
     try {
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.zhihuApiKey}`,
-        },
-        body: JSON.stringify({
-          query: keyword,
-          page_num: pageNum,
-          page_size: pageSize,
-        }),
-      });
+      let resp: Response;
+
+      if (workerBase) {
+        // 通过 Worker 转发（避免 CORS）
+        const workerUrl = new URL(`${workerBase}/zhihu-official-search`);
+        workerUrl.searchParams.set("q", keyword);
+        workerUrl.searchParams.set("access_key", config.zhihuApiKey);
+        workerUrl.searchParams.set("offset", String(offset));
+        workerUrl.searchParams.set("limit", String(pageSize));
+        workerUrl.searchParams.set("scope", scope);
+
+        // 简单 GET 请求，不触发 CORS preflight
+        resp = await fetch(workerUrl.toString(), { method: "GET" });
+      } else {
+        // 直接调用官方 API（可能遇到 CORS，作为回退）
+        const endpoint =
+          scope === "site"
+            ? "https://open.zhihu.com/v1/search"
+            : "https://open.zhihu.com/v1/global_search";
+
+        resp = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.zhihuApiKey}`,
+          },
+          body: JSON.stringify({
+            query: keyword,
+            limit: pageSize,
+            offset: offset,
+          }),
+        });
+      }
 
       if (!resp.ok) {
         const errText = await resp.text().catch(() => "");
+        if (resp.status === 401 || resp.status === 403) {
+          throw new Error(
+            `知乎官方 API 鉴权失败（${resp.status}）：AccessKey 无效或已过期。请检查知乎开放平台 API Key。`
+          );
+        }
         throw new Error(
-          `知乎官方 API 请求失败 (${resp.status})：${errText || resp.statusText}`
+          `知乎官方 API 请求失败 (${resp.status})：${errText.slice(0, 200) || resp.statusText}`
         );
       }
 
       const data = await resp.json();
-      const items = data.data || data.items || data.results || [];
+      // 兼容多种响应格式
+      const items = data.data || data.items || data.results || data.pageItems || [];
 
       if (items.length === 0) break;
 
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         allPosts.push({
-          id: `zhihu_p${pageNum}_${i}_${Date.now()}`,
+          id: item.id || `zhihu_p${pageNum}_${i}_${Date.now()}`,
           title: item.title || "（无标题）",
           content: item.content || item.snippet || item.excerpt || "",
           author: item.author || item.source || "匿名用户",
@@ -541,7 +591,7 @@ async function searchOfficial(
 
       if (items.length < pageSize || data.has_more === false) break;
     } catch (err) {
-      if (pageNum === 1) throw err;
+      if (pageNum === 0) throw err;
       break;
     }
   }
@@ -550,19 +600,26 @@ async function searchOfficial(
 }
 
 /**
- * 知乎全网搜索主入口
+ * 知乎搜索主入口
  *
  * 优先级：
- * 1. 若已配置 d_c0 → 使用 search_universal 签名调用（多代理自动回退）
- * 2. 否则 → 使用官方开放平台 API（open.zhihu.com，Bearer 鉴权）
+ * 1. 若已配置 zhihuApiKey → 使用官方开放平台 API（合规，通过 Worker 转发避免 CORS）
+ * 2. 若已配置 d_c0 → 使用 search_universal 签名调用（逆向，多代理回退）
  */
 export async function searchZhihu(
   keyword: string,
   config: ApiConfig,
   maxPages = 5
 ): Promise<ZhihuPost[]> {
+  // 优先使用官方 API（合规）
+  if (config.zhihuApiKey?.trim()) {
+    return searchOfficial(keyword, config, maxPages);
+  }
+  // 回退：签名模式（逆向）
   if (config.zhihuDc0?.trim()) {
     return searchUniversal(keyword, config, maxPages);
   }
-  return searchOfficial(keyword, config, maxPages);
+  throw new Error(
+    "未配置知乎 API Key 或 d_c0。请配置知乎开放平台 API Key（合规）或 d_c0（签名模式）。"
+  );
 }
