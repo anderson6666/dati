@@ -39,9 +39,12 @@ export async function testProxyAvailable(
   ok: boolean;
   message: string;
   details?: {
+    simpleOk?: boolean;
     preflightOk?: boolean;
     requestOk?: boolean;
     statusCode?: number;
+    failureStage?: "simple" | "preflight" | "request";
+    finalUrl?: string;
   };
 }> {
   const proxy = normalizeProxyUrl(rawProxy);
@@ -65,110 +68,95 @@ export async function testProxyAvailable(
   }
 
   const details: {
+    simpleOk?: boolean;
     preflightOk?: boolean;
     requestOk?: boolean;
     statusCode?: number;
+    failureStage?: "simple" | "preflight" | "request";
+    finalUrl?: string;
   } = {};
 
+  // 第 1 步：无自定义头 GET（不触发 CORS preflight，验证基础连通性 + 部署）
   try {
-    // 第 1 步：测试实际 GET 请求（带自定义头，模拟实际采集场景）
-    // 带自定义头会触发 CORS preflight，验证 Worker 是否正确处理 OPTIONS
-    try {
-      const resp = await fetch(finalUrl, {
-        method: "GET",
-        headers: {
-          "X-Zse-93": "101_3_3.0",
-          "X-Zse-96": "test-signature",
-          "Cookie": "d_c0=test",
-          "Content-Type": "application/json",
-        },
-      });
-      details.statusCode = resp.status;
-
-      // 知乎不带正确签名会返回 401/403/422，但只要收到响应就说明代理可用
-      const hasCorsHeader =
-        resp.headers.get("Access-Control-Allow-Origin") !== null;
-
-      if (!hasCorsHeader) {
-        return {
-          ok: false,
-          message: `代理响应缺少 CORS 头（状态 ${resp.status}）。请确保 Worker 代码设置了 Access-Control-Allow-Origin。`,
-          details,
-        };
-      }
-
-      // 收到响应 + 有 CORS 头 = 代理可用
-      details.requestOk = true;
-    } catch (err) {
-      details.requestOk = false;
+    const simpleResp = await fetch(finalUrl, { method: "GET" });
+    details.simpleOk = simpleResp.ok || simpleResp.status >= 400; // 任何 HTTP 响应都算"通"
+    if (!details.simpleOk) {
+      details.failureStage = "simple";
       return {
         ok: false,
-        message: `代理请求失败：${err instanceof Error ? err.message : "网络错误"}。代理可能未部署、地址错误，或未正确处理带自定义头的 CORS preflight。`,
-        details,
+        message: `代理无响应（无自定义头时也失败）。请检查：① Worker 是否已部署；② 地址是否正确（不要带路径）；③ 浏览器能否直接打开 ${proxy}。`,
+        details: { ...details, finalUrl },
       };
     }
-
-    // 第 2 步：测试 OPTIONS 预检请求（验证带自定义头时的 CORS 处理）
-    try {
-      const preflightResp = await fetch(finalUrl, {
-        method: "OPTIONS",
-        headers: {
-          "X-Test-Header": "test-value",
-          "Content-Type": "application/json",
-        },
-      });
-      details.preflightOk =
-        preflightResp.ok || preflightResp.status === 204 || preflightResp.status === 200;
-
-      const allowOrigin = preflightResp.headers.get("Access-Control-Allow-Origin");
-      const allowHeaders = preflightResp.headers.get("Access-Control-Allow-Headers");
-
-      if (!details.preflightOk) {
-        return {
-          ok: false,
-          message: `预检请求失败（状态 ${preflightResp.status}）。代理未正确处理 OPTIONS 请求，请更新 Worker 代码。`,
-          details,
-        };
-      }
-      if (!allowOrigin && !allowHeaders) {
-        return {
-          ok: false,
-          message: "预检响应缺少 CORS 头。请确保 Worker 代码返回 Access-Control-Allow-Origin 和 Access-Control-Allow-Headers。",
-          details,
-        };
-      }
-    } catch (err) {
-      details.preflightOk = false;
-      return {
-        ok: false,
-        message: `预检请求被阻止：${err instanceof Error ? err.message : "网络错误"}。代理可能未处理 OPTIONS 请求。`,
-        details,
-      };
-    }
-
-    // 根据状态码给出不同的成功提示
-    const status = details.statusCode;
-    let message = "代理可用：请求转发正常，CORS 头完整。";
-    if (status === 401 || status === 403) {
-      message = `代理可用（知乎返回 ${status}，需签名）。代理转发正常，CORS 头完整，可正常使用。`;
-    } else if (status === 422) {
-      message = `代理可用（知乎返回 422，签名校验）。代理转发正常，CORS 头完整，可正常使用。`;
-    } else if (status && status >= 200 && status < 300) {
-      message = `代理可用（状态 ${status}）。代理转发正常，CORS 头完整。`;
-    }
-
-    return {
-      ok: true,
-      message,
-      details,
-    };
   } catch (err) {
+    details.simpleOk = false;
+    details.failureStage = "simple";
+    const msg = err instanceof Error ? err.message : "网络错误";
+    if (location.protocol === "https:" && proxy.startsWith("http://")) {
+      return {
+        ok: false,
+        message: `混合内容被浏览器拦截：当前页面是 HTTPS，代理是 HTTP。请改用 https:// 的代理地址。`,
+        details: { ...details, finalUrl },
+      };
+    }
     return {
       ok: false,
-      message: `代理检测异常：${err instanceof Error ? err.message : "未知错误"}`,
-      details,
+      message: `代理不可达（${msg}）。可能原因：① Worker 未部署或路由配置错误；② 地址拼写错误（注意是否漏掉 ?url=）；③ DNS / 网络问题。请在浏览器直接访问 ${proxy} 验证。`,
+      details: { ...details, finalUrl },
     };
   }
+
+  // 第 2 步：带自定义头 GET（触发 CORS preflight，验证 Worker 是否处理 OPTIONS）
+  try {
+    const resp = await fetch(finalUrl, {
+      method: "GET",
+      headers: {
+        "X-Zse-93": "101_3_3.0",
+        "X-Zse-96": "test-signature",
+        Cookie: "d_c0=test",
+        "Content-Type": "application/json",
+      },
+    });
+    details.statusCode = resp.status;
+
+    const hasCorsHeader =
+      resp.headers.get("Access-Control-Allow-Origin") !== null;
+
+    if (!hasCorsHeader) {
+      return {
+        ok: false,
+        message: `代理响应缺少 CORS 头（状态 ${resp.status}）。请在 Worker 中设置：Access-Control-Allow-Origin: *。`,
+        details: { ...details, finalUrl },
+      };
+    }
+    details.requestOk = true;
+  } catch (err) {
+    details.requestOk = false;
+    details.failureStage = "request";
+    const msg = err instanceof Error ? err.message : "网络错误";
+    return {
+      ok: false,
+      message: `带自定义头时请求失败（${msg}）。第 1 步能通说明代理已部署；此步失败说明 Worker 没有正确处理带自定义头的 CORS preflight。请在 Worker 的 fetch 处理中，对 OPTIONS 请求直接返回 204 并带上 CORS 头。`,
+      details: { ...details, finalUrl },
+    };
+  }
+
+  // 全部通过：根据状态码给出不同的成功提示
+  const status = details.statusCode;
+  let message = "代理可用：请求转发正常，CORS 头完整。";
+  if (status === 401 || status === 403) {
+    message = `代理可用（知乎返回 ${status}，需签名）。代理转发正常，CORS 头完整，可正常使用。`;
+  } else if (status === 422) {
+    message = `代理可用（知乎返回 422，签名校验）。代理转发正常，CORS 头完整，可正常使用。`;
+  } else if (status && status >= 200 && status < 300) {
+    message = `代理可用（状态 ${status}）。代理转发正常，CORS 头完整。`;
+  }
+
+  return {
+    ok: true,
+    message,
+    details: { ...details, finalUrl },
+  };
 }
 
 /**
