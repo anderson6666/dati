@@ -54,7 +54,8 @@ export interface PracticeProgress {
 }
 
 export interface ApiConfig {
-  zhihuApiKey: string;
+  zhihuClientId: string; // 知乎开放平台 client_id
+  zhihuApiKey: string; // 知乎开放平台 client_secret
   zhihuSearchType: "全网" | "站内"; // 知乎搜索范围：全网搜索 / 站内搜索
   zhihuApiMode: "official" | "proxy"; // 官方开放平台 / 第三方中转 API
   zhihuProxyUrl: string; // 第三方中转 API 地址

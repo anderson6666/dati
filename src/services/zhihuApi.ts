@@ -203,9 +203,15 @@ async function searchOfficial(
 
     try {
       // 通过 Worker 转发（Worker 内部处理 OAuth + 搜索）
+      // client_id 和 client_secret 可选：如果前端未填，Worker 从环境变量读取
       const workerUrl = new URL(`${workerBase}/zhihu-official-search`);
       workerUrl.searchParams.set("q", keyword);
-      workerUrl.searchParams.set("client_secret", config.zhihuApiKey);
+      if (config.zhihuClientId?.trim()) {
+        workerUrl.searchParams.set("client_id", config.zhihuClientId.trim());
+      }
+      if (config.zhihuApiKey?.trim()) {
+        workerUrl.searchParams.set("client_secret", config.zhihuApiKey.trim());
+      }
       workerUrl.searchParams.set("offset", String(offset));
       workerUrl.searchParams.set("limit", String(pageSize));
       workerUrl.searchParams.set("scope", scope);
@@ -225,7 +231,7 @@ async function searchOfficial(
         }
         if (resp.status === 401 || resp.status === 403) {
           throw new Error(
-            `知乎官方 API 鉴权失败（${resp.status}）：AccessKey 无效或已过期。\n${detail}`
+            `知乎 OAuth 鉴权失败（${resp.status}）：client_id/client_secret 无效，或 access_token 已过期。\n${detail}`
           );
         }
         throw new Error(
@@ -279,9 +285,12 @@ export async function searchZhihu(
   config: ApiConfig,
   maxPages = 5
 ): Promise<ZhihuPost[]> {
-  if (!config.zhihuApiKey?.trim()) {
-    throw new Error(
-      "未配置知乎 API Key。请在配置区填写知乎开放平台 API Key。"
+  // 知乎凭证可选：前端填写 或 Worker 环境变量配置（二选一）
+  const hasFrontendCreds = config.zhihuClientId?.trim() && config.zhihuApiKey?.trim();
+  if (!hasFrontendCreds) {
+    // 前端未填，提醒用户也可在 Worker 环境变量中配置
+    console.info(
+      "知乎凭证未在前端配置，将依赖 Worker 环境变量 ZHIHU_CLIENT_ID / ZHIHU_CLIENT_SECRET"
     );
   }
   return searchOfficial(keyword, config, maxPages);

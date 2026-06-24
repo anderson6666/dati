@@ -58,6 +58,7 @@ export const useStore = create<QuestionBankState>()(
       wrongRecords: [],
       progress: {},
       apiConfig: {
+        zhihuClientId: "",
         zhihuApiKey: "",
         zhihuSearchType: "全网",
         zhihuApiMode: "official",
@@ -187,7 +188,7 @@ export const useStore = create<QuestionBankState>()(
     }),
     {
       name: "qbm_store",
-      version: 3,
+      version: 4,
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as { apiConfig?: Partial<ApiConfig> };
         // v2→v3: 确保 corsProxyUrl 有默认值
@@ -195,6 +196,13 @@ export const useStore = create<QuestionBankState>()(
           state.apiConfig = {
             ...state.apiConfig,
             corsProxyUrl: state.apiConfig.corsProxyUrl || "https://corsproxy.io/?url=",
+          };
+        }
+        // v3→v4: 确保 zhihuClientId 有默认值
+        if (version < 4 && state.apiConfig) {
+          state.apiConfig = {
+            ...state.apiConfig,
+            zhihuClientId: state.apiConfig.zhihuClientId || "",
           };
         }
         return state;
