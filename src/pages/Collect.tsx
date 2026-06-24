@@ -96,10 +96,11 @@ export default function Collect() {
     if (kw) setKeyword(kw);
   }, [searchParams]);
 
-  // 验证 API 密钥是否已配置
+  // 验证 API 密钥与 CORS 代理是否已配置
   const isReady =
     keyword.trim() &&
     apiConfig.zhihuApiKey.trim() &&
+    apiConfig.corsProxyUrl.trim() &&
     apiConfig.agnesApiKey.trim();
 
   const updateStage = (idx: number, status: CollectStage["status"], detail?: string) => {
@@ -269,7 +270,11 @@ export default function Collect() {
             </button>
             {!isReady && (
               <p className="mt-3 rounded-sm bg-wine/8 border border-wine/20 px-3 py-2 font-serif text-xs text-wine">
-                请先配置下方两个 API 密钥后才能开始采集
+                请补全：
+                {!keyword.trim() && "考试关键词"}
+                {keyword.trim() && !apiConfig.corsProxyUrl.trim() && "CORS 代理地址"}
+                {keyword.trim() && apiConfig.corsProxyUrl.trim() && !apiConfig.zhihuApiKey.trim() && "知乎 API Key"}
+                {keyword.trim() && apiConfig.corsProxyUrl.trim() && apiConfig.zhihuApiKey.trim() && !apiConfig.agnesApiKey.trim() && "Agnes API Key"}
               </p>
             )}
           </div>
@@ -416,17 +421,21 @@ export default function Collect() {
 
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {[
-                      { label: "自动回退", url: "" },
-                      { label: "corsproxy.io", url: "https://corsproxy.io/?url=" },
-                      { label: "allorigins", url: "https://api.allorigins.win/raw?url=" },
-                      { label: "codetabs", url: "https://api.codetabs.com/v1/proxy/?quest=" },
+                      { label: "不填（自动回退）", url: "" },
+                      { label: "corsproxy.io ⚠", url: "https://corsproxy.io/?url=", disabled: true },
+                      { label: "allorigins ⚠", url: "https://api.allorigins.win/raw?url=", disabled: true },
+                      { label: "codetabs ⚠", url: "https://api.codetabs.com/v1/proxy/?quest=", disabled: true },
                     ].map((proxy) => (
                       <button
                         key={proxy.label}
-                        onClick={() => handleProxyChange(proxy.url)}
+                        onClick={() => !proxy.disabled && handleProxyChange(proxy.url)}
+                        disabled={proxy.disabled}
+                        title={proxy.disabled ? "通用公共代理不兼容 /zhihu-official-search 端点，请部署自己的 Cloudflare Worker" : undefined}
                         className={cn(
                           "rounded-sm border px-2 py-0.5 font-mono text-[10px] transition-all",
-                          apiConfig.corsProxyUrl === proxy.url
+                          proxy.disabled
+                            ? "border-ink-200 text-ink-300 cursor-not-allowed line-through"
+                            : apiConfig.corsProxyUrl === proxy.url
                             ? "border-amber bg-amber/10 text-amber-dark"
                             : "border-ink-200 text-ink-500 hover:border-amber/40"
                         )}

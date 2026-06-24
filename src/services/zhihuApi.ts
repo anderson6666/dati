@@ -186,6 +186,13 @@ async function searchOfficial(
     .replace(/\?url=.*$/, "")
     .replace(/\/$/, "");
 
+  if (!workerBase) {
+    throw new Error(
+      "未配置 CORS 代理地址。请在配置区填写部署好的 Cloudflare Worker 地址（形如 https://xxx.workers.dev/）。\n" +
+        "通用公共代理（corsproxy.io / allorigins / codetabs）不兼容当前协议，必须部署自己的 Worker。"
+    );
+  }
+
   // 搜索范围：全网或站内
   const scope = config.zhihuSearchType === "站内" ? "site" : "global";
 
@@ -205,26 +212,23 @@ async function searchOfficial(
         workerUrl.searchParams.set("scope", scope);
 
         // 简单 GET 请求，不触发 CORS preflight
-        resp = await fetch(workerUrl.toString(), { method: "GET" });
+        try {
+          resp = await fetch(workerUrl.toString(), { method: "GET" });
+        } catch (fetchErr) {
+          // 浏览器底层错误（DNS / TLS / 连接被关 / CORS 拦截）只暴露 "Failed to fetch"
+          // 重新包装错误，附上 Worker URL 与排查提示
+          const rawMsg =
+            fetchErr instanceof Error ? fetchErr.message : "Failed to fetch";
+          throw new Error(
+            `请求 Worker 失败（${rawMsg}）。请检查：\n` +
+              `1) Worker 地址 ${workerBase} 是否正确、可在浏览器直接打开；\n` +
+              `2) Worker 是否已部署并包含 /zhihu-official-search 端点；\n` +
+              `3) 当前网络是否能访问 ${new URL(workerBase).host}。`
+          );
+        }
       } else {
-        // 直接调用官方 API（可能遇到 CORS，作为回退）
-        const endpoint =
-          scope === "site"
-            ? "https://open.zhihu.com/v1/search"
-            : "https://open.zhihu.com/v1/global_search";
-
-        resp = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.zhihuApiKey}`,
-          },
-          body: JSON.stringify({
-            query: keyword,
-            limit: pageSize,
-            offset: offset,
-          }),
-        });
+        // 不会走到这里（前面已 throw），保留作类型安全
+        throw new Error("未配置 CORS 代理地址");
       }
 
       if (!resp.ok) {
