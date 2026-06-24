@@ -112,14 +112,21 @@ export async function testProxyAvailable(
   } = {};
 
   try {
-    // 第 1 步：测试实际 GET 请求（验证代理转发能力）
+    // 第 1 步：测试实际 GET 请求（带自定义头，模拟实际采集场景）
+    // 带自定义头会触发 CORS preflight，验证 Worker 是否正确处理 OPTIONS
     try {
       const resp = await fetch(finalUrl, {
         method: "GET",
+        headers: {
+          "X-Zse-93": "101_3_3.0",
+          "X-Zse-96": "test-signature",
+          "Cookie": "d_c0=test",
+          "Content-Type": "application/json",
+        },
       });
       details.statusCode = resp.status;
 
-      // 知乎不带签名会返回 401/403/422，但只要收到响应就说明代理可用
+      // 知乎不带正确签名会返回 401/403/422，但只要收到响应就说明代理可用
       const hasCorsHeader =
         resp.headers.get("Access-Control-Allow-Origin") !== null;
 
@@ -137,7 +144,7 @@ export async function testProxyAvailable(
       details.requestOk = false;
       return {
         ok: false,
-        message: `代理请求失败：${err instanceof Error ? err.message : "网络错误"}。代理可能未部署或地址错误。`,
+        message: `代理请求失败：${err instanceof Error ? err.message : "网络错误"}。代理可能未部署、地址错误，或未正确处理带自定义头的 CORS preflight。`,
         details,
       };
     }

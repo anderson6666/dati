@@ -507,22 +507,34 @@ export default function Collect() {
       <pre className="overflow-x-auto rounded-sm bg-ink-900 p-3 font-mono text-[10px] leading-relaxed text-parchment-300">
 {`export default {
   async fetch(request) {
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Expose-Headers': '*',
+    };
+
+    // 处理 CORS 预检请求（必须最先处理，不 fetch 目标）
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
+
     try {
       const url = new URL(request.url);
       const target = url.searchParams.get('url');
 
       if (!target) {
-        return new Response('Missing url parameter', { status: 400 });
+        return new Response('Missing url parameter', { status: 400, headers: corsHeaders });
       }
 
       let targetUrl;
       try {
         targetUrl = new URL(target);
       } catch (e) {
-        return new Response('Invalid target URL', { status: 400 });
+        return new Response('Invalid target URL', { status: 400, headers: corsHeaders });
       }
       if (!['http:', 'https:'].includes(targetUrl.protocol)) {
-        return new Response('Only http/https URLs are supported', { status: 400 });
+        return new Response('Only http/https URLs are supported', { status: 400, headers: corsHeaders });
       }
 
       // 构造请求头，移除浏览器和 CF 的标识头
@@ -547,14 +559,7 @@ export default function Collect() {
       });
 
       const newHeaders = new Headers(resp.headers);
-      newHeaders.set('Access-Control-Allow-Origin', '*');
-      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      newHeaders.set('Access-Control-Allow-Headers', '*');
-      newHeaders.set('Access-Control-Expose-Headers', '*');
-
-      if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: newHeaders });
-      }
+      Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
 
       return new Response(resp.body, {
         status: resp.status,
@@ -564,7 +569,7 @@ export default function Collect() {
     } catch (error) {
       return new Response(\`Proxy error: \${error.message}\`, {
         status: 500,
-        headers: { 'Content-Type': 'text/plain' }
+        headers: { 'Content-Type': 'text/plain', ...corsHeaders }
       });
     }
   }
@@ -574,22 +579,33 @@ export default function Collect() {
                         onClick={() => {
                           navigator.clipboard.writeText(`export default {
   async fetch(request) {
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Expose-Headers': '*',
+    };
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
+
     try {
       const url = new URL(request.url);
       const target = url.searchParams.get('url');
 
       if (!target) {
-        return new Response('Missing url parameter', { status: 400 });
+        return new Response('Missing url parameter', { status: 400, headers: corsHeaders });
       }
 
       let targetUrl;
       try {
         targetUrl = new URL(target);
       } catch (e) {
-        return new Response('Invalid target URL', { status: 400 });
+        return new Response('Invalid target URL', { status: 400, headers: corsHeaders });
       }
       if (!['http:', 'https:'].includes(targetUrl.protocol)) {
-        return new Response('Only http/https URLs are supported', { status: 400 });
+        return new Response('Only http/https URLs are supported', { status: 400, headers: corsHeaders });
       }
 
       const headers = new Headers(request.headers);
@@ -611,14 +627,7 @@ export default function Collect() {
       });
 
       const newHeaders = new Headers(resp.headers);
-      newHeaders.set('Access-Control-Allow-Origin', '*');
-      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      newHeaders.set('Access-Control-Allow-Headers', '*');
-      newHeaders.set('Access-Control-Expose-Headers', '*');
-
-      if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: newHeaders });
-      }
+      Object.entries(corsHeaders).forEach(([k, v]) => newHeaders.set(k, v));
 
       return new Response(resp.body, {
         status: resp.status,
@@ -628,7 +637,7 @@ export default function Collect() {
     } catch (error) {
       return new Response(\`Proxy error: \${error.message}\`, {
         status: 500,
-        headers: { 'Content-Type': 'text/plain' }
+        headers: { 'Content-Type': 'text/plain', ...corsHeaders }
       });
     }
   }
