@@ -210,8 +210,8 @@ async function searchOfficial(
         // 直接调用官方 API（可能遇到 CORS，作为回退）
         const endpoint =
           scope === "site"
-            ? "https://open.zhihu.com/v1/search"
-            : "https://open.zhihu.com/v1/global_search";
+            ? "https://open.zhihu.com/api/v4/search/site"
+            : "https://open.zhihu.com/api/v4/search/global";
 
         resp = await fetch(endpoint, {
           method: "POST",

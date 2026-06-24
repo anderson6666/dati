@@ -486,8 +486,8 @@ export default function Collect() {
         }
 
         const endpoint = scope === 'site'
-          ? 'https://open.zhihu.com/v1/search'
-          : 'https://open.zhihu.com/v1/global_search';
+          ? 'https://open.zhihu.com/api/v4/search/site'
+          : 'https://open.zhihu.com/api/v4/search/global';
 
         const resp = await fetch(endpoint, {
           method: 'POST',
@@ -616,8 +616,8 @@ export default function Collect() {
         }
 
         const endpoint = scope === 'site'
-          ? 'https://open.zhihu.com/v1/search'
-          : 'https://open.zhihu.com/v1/global_search';
+          ? 'https://open.zhihu.com/api/v4/search/site'
+          : 'https://open.zhihu.com/api/v4/search/global';
 
         const resp = await fetch(endpoint, {
           method: 'POST',
