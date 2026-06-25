@@ -24,6 +24,110 @@ interface AgnesExtractResult {
 }
 
 /**
+ * 关键词扩展结果：深度 + 广度两个维度的专项关键词
+ */
+export interface KeywordExpansionResult {
+  /** 深度方向关键词：在主关键词领域内往下钻取的细分考点 */
+  depth: string[];
+  /** 广度方向关键词：横向辐射的相关考点与跨学科关联 */
+  breadth: string[];
+  /** 全部专项关键词（深度 + 广度去重） */
+  all: string[];
+}
+
+/**
+ * 调用 Agnes 大模型对用户输入的主关键词进行深度 + 广度扩展，
+ * 输出更多可被逐一采集的专项关键词。
+ *
+ * - 深度：在该考试/学科内部继续细分章节、知识点、题型
+ * - 广度：横向辐射到相关学科、易混淆考点、跨学科应用
+ */
+export async function expandKeyword(
+  mainKeyword: string,
+  config: ApiConfig
+): Promise<KeywordExpansionResult> {
+  const endpoint = `${config.agnesEndpoint.replace(/\/$/, "")}/chat/completions`;
+
+  const systemPrompt = `你是一位资深的考试命题与教研专家。你的任务是：对用户给出的主关键词，从「深度」与「广度」两个维度扩展出尽可能多、可被逐一搜索采集真题的专项关键词。
+
+要求：
+1. 深度方向（depth）：在主关键词所属考试/学科内部，继续向下钻取细分章节、知识点、典型题型、易错点、真题高频考点。每条都是能直接搜出真题的具体子主题。
+2. 广度方向（breadth）：横向辐射——相关联的考试/学科、易混淆考点、跨学科应用、配套法规/标准、近年新增考点、行业前沿动态。
+3. 每条关键词长度 4-20 字，便于作为搜索引擎 query 使用；不要给出整句。
+4. 不要重复主关键词本身；不要给出过于宽泛（如"考试"、"复习"）或过于狭窄（如某个具体年份的某道题）的词。
+5. 深度方向给 8-15 条，广度方向给 5-10 条，按重要性排序。
+
+输出严格的 JSON，不要包含任何其他文字：
+{
+  "depth": ["深度关键词1", "深度关键词2", "..."],
+  "breadth": ["广度关键词1", "广度关键词2", "..."]
+}`;
+
+  const userPrompt = `主关键词：「${mainKeyword}」\n请按深度 + 广度两个维度扩展专项关键词。`;
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.agnesApiKey}`,
+    },
+    body: JSON.stringify({
+      model: "agnes-2.0-flash",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.5,
+      max_tokens: 2000,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(
+      `关键词扩展请求失败 (${resp.status})：${errText || resp.statusText}`
+    );
+  }
+
+  const data: AgnesChatResponse = await resp.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error("关键词扩展返回内容为空");
+  }
+
+  let parsed: { depth?: string[]; breadth?: string[] };
+  try {
+    const cleanContent = content
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+    parsed = JSON.parse(cleanContent);
+  } catch {
+    throw new Error("关键词扩展返回内容无法解析为 JSON，请重试");
+  }
+
+  const depth = (parsed.depth || [])
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+  const breadth = (parsed.breadth || [])
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+
+  const seen = new Set<string>();
+  const all: string[] = [];
+  for (const kw of [...depth, ...breadth]) {
+    if (!seen.has(kw)) {
+      seen.add(kw);
+      all.push(kw);
+    }
+  }
+
+  return { depth, breadth, all };
+}
+
+/**
  * 调用 Agnes 大模型 API，将原始素材去重、标准化为题目并生成应试技巧
  * 使用 OpenAI 兼容的 chat/completions 接口
  */

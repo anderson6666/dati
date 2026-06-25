@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Library } from "lucide-react";
+import { BookOpenCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
@@ -21,7 +21,7 @@ export default function Header() {
         {/* Logo */}
         <Link to="/" className="group flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-sm border border-amber/50 bg-ink-900 transition-transform group-hover:scale-105 lg:h-9 lg:w-9">
-            <Library className="h-4 w-4 text-amber-glow lg:h-5 lg:w-5" strokeWidth={1.5} />
+            <BookOpenCheck className="h-4 w-4 text-amber-glow lg:h-5 lg:w-5" strokeWidth={1.5} />
           </div>
           <div className="flex flex-col leading-none">
             <span className="font-display text-base font-semibold text-ink-900 lg:text-xl">

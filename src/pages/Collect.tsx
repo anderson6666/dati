@@ -20,16 +20,23 @@ import {
 import { useStore } from "@/store/useStore";
 import type { CollectStage, Exam } from "@/types";
 import { searchZhihu, testProxyAvailable } from "@/services/zhihuApi";
-import { processWithAgnes } from "@/services/agnesApi";
+import {
+  expandKeyword,
+  processWithAgnes,
+  type KeywordExpansionResult,
+} from "@/services/agnesApi";
 import { cn } from "@/lib/utils";
 
 const STAGE_DEFS: { key: string; label: string; detail: string }[] = [
-  { key: "search", label: "知乎检索", detail: "调用知乎搜索 API，按配置的搜索范围匹配考试关键词" },
-  { key: "fetch", label: "素材抓取", detail: "抓取帖子正文、回答、评论中的题目与经验内容" },
+  { key: "expand", label: "关键词扩展", detail: "Agnes 大模型在深度与广度两个维度上扩展出更多专项关键词" },
+  { key: "search", label: "知乎检索 + 素材抓取", detail: "按每个专项关键词调用知乎搜索 API，逐一抓取真题回忆与经验帖" },
   { key: "dedup", label: "AI 去重", detail: "Agnes 模型剔除重复与无效题目，识别相似题干" },
   { key: "standardize", label: "标准化整理", detail: "统一为选择题/判断题标准格式，归纳知识点与难度" },
   { key: "technique", label: "技巧生成", detail: "提炼秒杀口诀、避坑要点、记忆方法，与题目一一绑定" },
 ];
+
+/** 关键词扩展后逐一生成题目时，单个专项关键词最多采集条数 */
+const PER_KEYWORD_LIMIT = 8;
 
 export default function Collect() {
   const navigate = useNavigate();
@@ -61,6 +68,15 @@ export default function Collect() {
   const [proxyTestResult, setProxyTestResult] = useState<{
     ok: boolean;
     message: string;
+  } | null>(null);
+
+  // 关键词扩展结果（深度 + 广度）
+  const [expansion, setExpansion] = useState<KeywordExpansionResult | null>(null);
+  // 当前正在处理的专项关键词序号（用于进度展示）
+  const [subProgress, setSubProgress] = useState<{
+    current: number;
+    total: number;
+    keyword: string;
   } | null>(null);
 
   // 检测代理可用性（手动触发）
@@ -116,26 +132,39 @@ export default function Collect() {
     setCollecting(true);
     setDone(false);
     setResultStats(null);
+    setExpansion(null);
+    setSubProgress(null);
     setStages(STAGE_DEFS.map((s) => ({ ...s, status: "pending" })));
 
+    const mainKeyword = keyword.trim();
+
     try {
-      // 阶段 1+2：知乎搜索 + 素材抓取
-      updateStage(0, "active");
-      updateStage(1, "active", `正在通过知乎开放平台搜索 API 抓取素材…`);
+      // ============ 阶段 0：关键词扩展（深度 + 广度） ============
+      updateStage(0, "active", "Agnes 正在按深度与广度两个维度扩展专项关键词…");
 
-      const posts = await searchZhihu(keyword.trim(), apiConfig);
-
-      updateStage(0, "done", `知乎${apiConfig.zhihuSearchType}搜索完成，匹配 ${posts.length} 条素材`);
-      updateStage(1, "done", `成功抓取 ${posts.length} 条帖子正文与经验内容`);
-
-      if (posts.length === 0) {
-        throw new Error(`知乎${apiConfig.zhihuSearchType}搜索未返回任何素材，请尝试更换关键词`);
+      let expanded: KeywordExpansionResult;
+      try {
+        expanded = await expandKeyword(mainKeyword, apiConfig);
+      } catch (err) {
+        // 扩展失败时回退：只用主关键词自身
+        expanded = { depth: [], breadth: [], all: [mainKeyword] };
       }
+      setExpansion(expanded);
+
+      // 待采集的专项关键词列表（含主关键词本身作为兜底）
+      const subKeywords =
+        expanded.all.length > 0 ? expanded.all : [mainKeyword];
+
+      updateStage(
+        0,
+        "done",
+        `扩展出 ${expanded.depth.length} 条深度 + ${expanded.breadth.length} 条广度专项关键词，共 ${subKeywords.length} 个待采集`
+      );
 
       // 确定目标考试：优先匹配已有考试，否则动态创建
       let examId: string;
       const matchedExam = exams.find(
-        (e) => keyword.includes(e.name) || e.name.includes(keyword)
+        (e) => mainKeyword.includes(e.name) || e.name.includes(mainKeyword)
       );
       if (matchedExam) {
         examId = matchedExam.id;
@@ -143,8 +172,8 @@ export default function Collect() {
         examId = `exam_${Date.now()}`;
         const newExam: Exam = {
           id: examId,
-          name: keyword.trim(),
-          description: `通过知乎全网搜索 + Agnes 大模型自动采集生成`,
+          name: mainKeyword,
+          description: `通过知乎全网搜索 + Agnes 大模型自动采集生成（关键词扩展：${subKeywords.length} 个专项）`,
           icon: "BookOpen",
           category: "自定义",
           hot: false,
@@ -152,40 +181,101 @@ export default function Collect() {
         addExam(newExam);
       }
 
-      // 阶段 3+4+5：Agnes 去重 + 标准化 + 技巧生成（一次性调用）
-      updateStage(2, "active", "Agnes 模型正在分析素材、剔除重复题目…");
+      // ============ 阶段 1-4：逐个专项关键词采集 + 生成 ============
+      updateStage(1, "active", `开始逐一采集 ${subKeywords.length} 个专项关键词…`);
+      updateStage(2, "active", "等待素材进入 Agnes 去重…");
       updateStage(3, "active", "等待 Agnes 标准化整理…");
       updateStage(4, "active", "等待 Agnes 生成应试技巧…");
 
-      const result = await processWithAgnes(
-        keyword.trim(),
-        posts,
-        apiConfig,
-        examId
-      );
+      let totalPosts = 0;
+      const allQuestions = [];
+      const allTechniques = [];
+      const seenQuestionStems = new Set<string>(); // 跨关键词去重
+
+      for (let i = 0; i < subKeywords.length; i++) {
+        const subKw = subKeywords[i];
+        setSubProgress({ current: i + 1, total: subKeywords.length, keyword: subKw });
+        updateStage(
+          1,
+          "active",
+          `(${i + 1}/${subKeywords.length}) 正在采集「${subKw}」…`
+        );
+
+        // 1) 知乎搜索
+        let posts: Awaited<ReturnType<typeof searchZhihu>> = [];
+        try {
+          posts = await searchZhihu(subKw, apiConfig);
+        } catch (err) {
+          // 单个关键词失败不阻断整体流程
+          continue;
+        }
+        totalPosts += posts.length;
+
+        if (posts.length === 0) continue;
+
+        // 2) Agnes 处理（去重 + 标准化 + 技巧）
+        try {
+          const result = await processWithAgnes(
+            subKw,
+            posts,
+            apiConfig,
+            examId
+          );
+
+          // 跨关键词去重：题干相似度通过简单字符串包含判断
+          const dedupedQuestions = result.questions.filter((q) => {
+            const stemKey = q.stem.trim().slice(0, 30);
+            if (seenQuestionStems.has(stemKey)) return false;
+            seenQuestionStems.add(stemKey);
+            return true;
+          });
+
+          allQuestions.push(...dedupedQuestions);
+          allTechniques.push(...result.techniques);
+        } catch (err) {
+          // 单个关键词处理失败不阻断整体
+          continue;
+        }
+      }
+
+      setSubProgress(null);
 
       // 写入题库
-      if (result.questions.length > 0) {
-        addQuestions(result.questions);
+      if (allQuestions.length > 0) {
+        addQuestions(allQuestions);
       }
-      if (result.techniques.length > 0) {
-        addTechniques(result.techniques);
+      if (allTechniques.length > 0) {
+        addTechniques(allTechniques);
       }
 
-      updateStage(2, "done", `剔除重复题目，识别 ${result.questions.length} 道有效题目`);
+      updateStage(
+        1,
+        "done",
+        `完成 ${subKeywords.length} 个专项关键词采集，共抓取 ${totalPosts} 条素材`
+      );
+      updateStage(
+        2,
+        "done",
+        `跨关键词去重后保留 ${allQuestions.length} 道有效题目`
+      );
       updateStage(3, "done", `标准化为选择题/判断题，归纳知识点与难度`);
-      updateStage(4, "done", `生成 ${result.techniques.length} 条应试技巧，已与题目绑定`);
+      updateStage(
+        4,
+        "done",
+        `生成 ${allTechniques.length} 条应试技巧，已与题目绑定`
+      );
 
       setResultStats({
-        posts: posts.length,
-        questions: result.questions.length,
-        techniques: result.techniques.length,
+        posts: totalPosts,
+        questions: allQuestions.length,
+        techniques: allTechniques.length,
       });
 
       setCollecting(false);
       setDone(true);
     } catch (err) {
       setCollecting(false);
+      setSubProgress(null);
       const msg = err instanceof Error ? err.message : "采集过程中发生未知错误";
       setError(msg);
       // 将进行中的阶段标记为失败
@@ -216,7 +306,7 @@ export default function Collect() {
             全网资料自动采集
           </h1>
           <p className="mt-3 max-w-2xl font-serif text-base text-ink-500">
-            输入考试名称，调用知乎搜索 API（默认<strong>全网搜索</strong>，可切换站内）抓取互联网上分散的真题回忆、网友整理题库、错题解析、答题经验帖子，再交由 Agnes 大模型去重整理，一次获得最全题库。
+            输入考试关键词后，Agnes 大模型会先在<strong>深度</strong>（细分章节、知识点、典型题型）与<strong>广度</strong>（相关学科、易混淆考点、跨学科应用）两个维度上扩展出更多专项关键词，再逐一调用知乎搜索 API 抓取真题回忆与经验帖，跨关键词去重后生成最全题库。
           </p>
         </div>
       </div>
@@ -837,6 +927,104 @@ export default function Collect() {
                 </div>
               ))}
             </div>
+
+            {/* 扩展出的专项关键词 */}
+            {expansion && (expansion.depth.length > 0 || expansion.breadth.length > 0) && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-5 rounded-sm border border-amber/30 bg-amber/5 p-4"
+              >
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-wider text-amber-dark">
+                  扩展出的专项关键词（{expansion.all.length}）
+                </p>
+
+                {expansion.depth.length > 0 && (
+                  <div className="mb-2">
+                    <p className="mb-1 font-serif text-[11px] text-ink-500">
+                      <span className="font-mono text-amber-dark">深度 ·</span> 细分章节 / 知识点 / 题型
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {expansion.depth.map((kw) => {
+                        const isCurrent =
+                          subProgress?.keyword === kw && collecting;
+                        return (
+                          <span
+                            key={`d-${kw}`}
+                            className={cn(
+                              "rounded-sm border px-2 py-0.5 font-serif text-[11px] transition-all",
+                              isCurrent
+                                ? "border-amber bg-amber text-ink-900 shadow-sm"
+                                : "border-amber/30 bg-amber/5 text-amber-dark"
+                            )}
+                          >
+                            {isCurrent && "▸ "}
+                            {kw}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {expansion.breadth.length > 0 && (
+                  <div>
+                    <p className="mb-1 font-serif text-[11px] text-ink-500">
+                      <span className="font-mono text-moss">广度 ·</span> 相关学科 / 易混淆 / 跨学科
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {expansion.breadth.map((kw) => {
+                        const isCurrent =
+                          subProgress?.keyword === kw && collecting;
+                        return (
+                          <span
+                            key={`b-${kw}`}
+                            className={cn(
+                              "rounded-sm border px-2 py-0.5 font-serif text-[11px] transition-all",
+                              isCurrent
+                                ? "border-moss bg-moss text-ink-900 shadow-sm"
+                                : "border-moss/30 bg-moss/5 text-moss-dark"
+                            )}
+                          >
+                            {isCurrent && "▸ "}
+                            {kw}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* 逐项采集进度条 */}
+            {collecting && subProgress && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="mt-4 rounded-sm border border-amber/20 bg-parchment-50 p-3"
+              >
+                <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-ink-500">
+                  <span>逐项采集进度</span>
+                  <span className="text-amber-dark">
+                    {subProgress.current} / {subProgress.total}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink-200/50">
+                  <motion.div
+                    className="h-full bg-amber"
+                    initial={{ width: 0 }}
+                    animate={{
+                      width: `${(subProgress.current / subProgress.total) * 100}%`,
+                    }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </div>
+                <p className="mt-1.5 font-serif text-[11px] text-ink-600">
+                  正在采集：<span className="text-amber-dark">{subProgress.keyword}</span>
+                </p>
+              </motion.div>
+            )}
 
             {/* 采集结果统计 */}
             {done && resultStats && (
