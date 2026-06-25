@@ -18,25 +18,10 @@ import {
   X,
 } from "lucide-react";
 import { useStore } from "@/store/useStore";
-import type { CollectStage, Exam } from "@/types";
-import { searchZhihu, testProxyAvailable } from "@/services/zhihuApi";
-import {
-  expandKeyword,
-  processWithAgnes,
-  type KeywordExpansionResult,
-} from "@/services/agnesApi";
+import { testProxyAvailable } from "@/services/zhihuApi";
+import { runCollectTask } from "@/services/collectTask";
+import { QUESTION_TYPE_LABEL } from "@/types";
 import { cn } from "@/lib/utils";
-
-const STAGE_DEFS: { key: string; label: string; detail: string }[] = [
-  { key: "expand", label: "关键词扩展", detail: "Agnes 大模型在深度与广度两个维度上扩展出更多专项关键词" },
-  { key: "search", label: "知乎检索 + 素材抓取", detail: "按每个专项关键词调用知乎搜索 API，逐一抓取真题回忆与经验帖" },
-  { key: "dedup", label: "AI 去重", detail: "Agnes 模型剔除重复与无效题目，识别相似题干" },
-  { key: "standardize", label: "标准化整理", detail: "统一为选择题/判断题标准格式，归纳知识点与难度" },
-  { key: "technique", label: "技巧生成", detail: "提炼秒杀口诀、避坑要点、记忆方法，与题目一一绑定" },
-];
-
-/** 关键词扩展后逐一生成题目时，单个专项关键词最多采集条数 */
-const PER_KEYWORD_LIMIT = 8;
 
 export default function Collect() {
   const navigate = useNavigate();
@@ -45,38 +30,26 @@ export default function Collect() {
   const setApiConfig = useStore((s) => s.setApiConfig);
   const exams = useStore((s) => s.exams);
   const setCurrentExam = useStore((s) => s.setCurrentExam);
-  const addExam = useStore((s) => s.addExam);
-  const addQuestions = useStore((s) => s.addQuestions);
-  const addTechniques = useStore((s) => s.addTechniques);
+  const resetCollectTask = useStore((s) => s.resetCollectTask);
+
+  // 后台采集任务状态（从 store 读取，导航离开再回来不会丢失）
+  const task = useStore((s) => s.collectTask);
+  const collecting = task.status === "running";
+  const done = task.status === "done";
+  const error = task.error;
+  const stages = task.stages;
+  const expansion = task.expansion;
+  const subProgress = task.subProgress;
+  const resultStats = task.resultStats;
 
   const [keyword, setKeyword] = useState(searchParams.get("keyword") || "");
   const [showZhihuKey, setShowZhihuKey] = useState(false);
   const [showAgnesKey, setShowAgnesKey] = useState(false);
-  const [stages, setStages] = useState<CollectStage[]>(
-    STAGE_DEFS.map((s) => ({ ...s, status: "pending" }))
-  );
-  const [collecting, setCollecting] = useState(false);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState("");
-  const [resultStats, setResultStats] = useState<{
-    posts: number;
-    questions: number;
-    techniques: number;
-  } | null>(null);
   // 代理可用性检测状态
   const [proxyTesting, setProxyTesting] = useState(false);
   const [proxyTestResult, setProxyTestResult] = useState<{
     ok: boolean;
     message: string;
-  } | null>(null);
-
-  // 关键词扩展结果（深度 + 广度）
-  const [expansion, setExpansion] = useState<KeywordExpansionResult | null>(null);
-  // 当前正在处理的专项关键词序号（用于进度展示）
-  const [subProgress, setSubProgress] = useState<{
-    current: number;
-    total: number;
-    keyword: string;
   } | null>(null);
 
   // 检测代理可用性（手动触发）
@@ -118,173 +91,16 @@ export default function Collect() {
     apiConfig.zhihuApiKey.trim() &&
     apiConfig.agnesApiKey.trim();
 
-  const updateStage = (idx: number, status: CollectStage["status"], detail?: string) => {
-    setStages((prev) =>
-      prev.map((s, i) =>
-        i === idx ? { ...s, status, ...(detail ? { detail } : {}) } : s
-      )
-    );
+  const startCollect = () => {
+    if (!isReady) return;
+    const mainKeyword = keyword.trim();
+    // 后台异步执行，不阻塞组件；导航离开不中断
+    runCollectTask(mainKeyword);
   };
 
-  const startCollect = async () => {
-    if (!isReady) return;
-    setError("");
-    setCollecting(true);
-    setDone(false);
-    setResultStats(null);
-    setExpansion(null);
-    setSubProgress(null);
-    setStages(STAGE_DEFS.map((s) => ({ ...s, status: "pending" })));
-
-    const mainKeyword = keyword.trim();
-
-    try {
-      // ============ 阶段 0：关键词扩展（深度 + 广度） ============
-      updateStage(0, "active", "Agnes 正在按深度与广度两个维度扩展专项关键词…");
-
-      let expanded: KeywordExpansionResult;
-      try {
-        expanded = await expandKeyword(mainKeyword, apiConfig);
-      } catch (err) {
-        // 扩展失败时回退：只用主关键词自身
-        expanded = { depth: [], breadth: [], all: [mainKeyword] };
-      }
-      setExpansion(expanded);
-
-      // 待采集的专项关键词列表（含主关键词本身作为兜底）
-      const subKeywords =
-        expanded.all.length > 0 ? expanded.all : [mainKeyword];
-
-      updateStage(
-        0,
-        "done",
-        `扩展出 ${expanded.depth.length} 条深度 + ${expanded.breadth.length} 条广度专项关键词，共 ${subKeywords.length} 个待采集`
-      );
-
-      // 确定目标考试：优先匹配已有考试，否则动态创建
-      let examId: string;
-      const matchedExam = exams.find(
-        (e) => mainKeyword.includes(e.name) || e.name.includes(mainKeyword)
-      );
-      if (matchedExam) {
-        examId = matchedExam.id;
-      } else {
-        examId = `exam_${Date.now()}`;
-        const newExam: Exam = {
-          id: examId,
-          name: mainKeyword,
-          description: `通过知乎全网搜索 + Agnes 大模型自动采集生成（关键词扩展：${subKeywords.length} 个专项）`,
-          icon: "BookOpen",
-          category: "自定义",
-          hot: false,
-        };
-        addExam(newExam);
-      }
-
-      // ============ 阶段 1-4：逐个专项关键词采集 + 生成 ============
-      updateStage(1, "active", `开始逐一采集 ${subKeywords.length} 个专项关键词…`);
-      updateStage(2, "active", "等待素材进入 Agnes 去重…");
-      updateStage(3, "active", "等待 Agnes 标准化整理…");
-      updateStage(4, "active", "等待 Agnes 生成应试技巧…");
-
-      let totalPosts = 0;
-      const allQuestions = [];
-      const allTechniques = [];
-      const seenQuestionStems = new Set<string>(); // 跨关键词去重
-
-      for (let i = 0; i < subKeywords.length; i++) {
-        const subKw = subKeywords[i];
-        setSubProgress({ current: i + 1, total: subKeywords.length, keyword: subKw });
-        updateStage(
-          1,
-          "active",
-          `(${i + 1}/${subKeywords.length}) 正在采集「${subKw}」…`
-        );
-
-        // 1) 知乎搜索
-        let posts: Awaited<ReturnType<typeof searchZhihu>> = [];
-        try {
-          posts = await searchZhihu(subKw, apiConfig);
-        } catch (err) {
-          // 单个关键词失败不阻断整体流程
-          continue;
-        }
-        totalPosts += posts.length;
-
-        if (posts.length === 0) continue;
-
-        // 2) Agnes 处理（去重 + 标准化 + 技巧）
-        try {
-          const result = await processWithAgnes(
-            subKw,
-            posts,
-            apiConfig,
-            examId
-          );
-
-          // 跨关键词去重：题干相似度通过简单字符串包含判断
-          const dedupedQuestions = result.questions.filter((q) => {
-            const stemKey = q.stem.trim().slice(0, 30);
-            if (seenQuestionStems.has(stemKey)) return false;
-            seenQuestionStems.add(stemKey);
-            return true;
-          });
-
-          allQuestions.push(...dedupedQuestions);
-          allTechniques.push(...result.techniques);
-        } catch (err) {
-          // 单个关键词处理失败不阻断整体
-          continue;
-        }
-      }
-
-      setSubProgress(null);
-
-      // 写入题库
-      if (allQuestions.length > 0) {
-        addQuestions(allQuestions);
-      }
-      if (allTechniques.length > 0) {
-        addTechniques(allTechniques);
-      }
-
-      updateStage(
-        1,
-        "done",
-        `完成 ${subKeywords.length} 个专项关键词采集，共抓取 ${totalPosts} 条素材`
-      );
-      updateStage(
-        2,
-        "done",
-        `跨关键词去重后保留 ${allQuestions.length} 道有效题目`
-      );
-      updateStage(3, "done", `标准化为选择题/判断题，归纳知识点与难度`);
-      updateStage(
-        4,
-        "done",
-        `生成 ${allTechniques.length} 条应试技巧，已与题目绑定`
-      );
-
-      setResultStats({
-        posts: totalPosts,
-        questions: allQuestions.length,
-        techniques: allTechniques.length,
-      });
-
-      setCollecting(false);
-      setDone(true);
-    } catch (err) {
-      setCollecting(false);
-      setSubProgress(null);
-      const msg = err instanceof Error ? err.message : "采集过程中发生未知错误";
-      setError(msg);
-      // 将进行中的阶段标记为失败
-      setStages((prev) =>
-        prev.map((s) =>
-          s.status === "active" ? { ...s, status: "pending" } : s
-        )
-      );
-    }
+  // 手动停止采集（重置任务状态，runner 内部会检测 status 变化后退出）
+  const handleStop = () => {
+    resetCollectTask();
   };
 
   const matchedExam = exams.find(
@@ -292,7 +108,8 @@ export default function Collect() {
   );
 
   const handleViewBank = () => {
-    if (matchedExam) setCurrentExam(matchedExam.id);
+    if (task.examId) setCurrentExam(task.examId);
+    else if (matchedExam) setCurrentExam(matchedExam.id);
     navigate("/bank");
   };
 
@@ -335,27 +152,40 @@ export default function Collect() {
               </p>
             )}
 
-            <button
-              onClick={startCollect}
-              disabled={!isReady || collecting}
-              className={cn(
-                "mt-4 w-full",
-                !isReady ? "btn-secondary cursor-not-allowed opacity-60" : "",
-                collecting ? "btn-secondary cursor-not-allowed" : "btn-primary"
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={startCollect}
+                disabled={!isReady || collecting}
+                className={cn(
+                  "flex-1",
+                  !isReady ? "btn-secondary cursor-not-allowed opacity-60" : "",
+                  collecting ? "btn-secondary cursor-not-allowed" : "btn-primary"
+                )}
+              >
+                {collecting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    正在搜尽全网…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" />
+                    开始智能采集
+                  </>
+                )}
+              </button>
+              {collecting && (
+                <button onClick={handleStop} className="btn-secondary shrink-0">
+                  <X className="h-4 w-4" />
+                  停止
+                </button>
               )}
-            >
-              {collecting ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  正在搜尽全网…
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4" />
-                  开始智能采集
-                </>
-              )}
-            </button>
+            </div>
+            {collecting && (
+              <p className="mt-2 font-serif text-[11px] text-ink-400">
+                采集在后台进行，可切换其他页面查看实时生成的题目，不会中断
+              </p>
+            )}
             {!isReady && (
               <p className="mt-3 rounded-sm bg-wine/8 border border-wine/20 px-3 py-2 font-serif text-xs text-wine">
                 请先配置下方两个 API 密钥后才能开始采集
@@ -948,6 +778,7 @@ export default function Collect() {
                       {expansion.depth.map((kw) => {
                         const isCurrent =
                           subProgress?.keyword === kw && collecting;
+                        const isDone = task.doneKeywords.includes(kw);
                         return (
                           <span
                             key={`d-${kw}`}
@@ -955,10 +786,13 @@ export default function Collect() {
                               "rounded-sm border px-2 py-0.5 font-serif text-[11px] transition-all",
                               isCurrent
                                 ? "border-amber bg-amber text-ink-900 shadow-sm"
+                                : isDone
+                                ? "border-moss/40 bg-moss/10 text-moss-dark line-through opacity-60"
                                 : "border-amber/30 bg-amber/5 text-amber-dark"
                             )}
                           >
                             {isCurrent && "▸ "}
+                            {isDone && "✓ "}
                             {kw}
                           </span>
                         );
@@ -976,6 +810,7 @@ export default function Collect() {
                       {expansion.breadth.map((kw) => {
                         const isCurrent =
                           subProgress?.keyword === kw && collecting;
+                        const isDone = task.doneKeywords.includes(kw);
                         return (
                           <span
                             key={`b-${kw}`}
@@ -983,10 +818,13 @@ export default function Collect() {
                               "rounded-sm border px-2 py-0.5 font-serif text-[11px] transition-all",
                               isCurrent
                                 ? "border-moss bg-moss text-ink-900 shadow-sm"
+                                : isDone
+                                ? "border-moss/40 bg-moss/10 text-moss-dark line-through opacity-60"
                                 : "border-moss/30 bg-moss/5 text-moss-dark"
                             )}
                           >
                             {isCurrent && "▸ "}
+                            {isDone && "✓ "}
                             {kw}
                           </span>
                         );
@@ -1023,6 +861,82 @@ export default function Collect() {
                 <p className="mt-1.5 font-serif text-[11px] text-ink-600">
                   正在采集：<span className="text-amber-dark">{subProgress.keyword}</span>
                 </p>
+              </motion.div>
+            )}
+
+            {/* 实时计数器 + 题目预览（采集中显示） */}
+            {collecting && task.liveQuestions > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-4 rounded-sm border border-amber/30 bg-amber/5 p-4"
+              >
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-amber-dark">
+                    实时生成
+                  </p>
+                  <button
+                    onClick={handleViewBank}
+                    className="font-mono text-[10px] text-amber-dark hover:underline"
+                  >
+                    查看题库 →
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div>
+                    <p className="font-display text-xl font-semibold text-ink-900">
+                      {task.livePosts}
+                    </p>
+                    <p className="font-mono text-[10px] text-ink-400">已抓素材</p>
+                  </div>
+                  <div>
+                    <p className="font-display text-xl font-semibold text-amber-dark">
+                      {task.liveQuestions}
+                    </p>
+                    <p className="font-mono text-[10px] text-ink-400">已生成题目</p>
+                  </div>
+                  <div>
+                    <p className="font-display text-xl font-semibold text-wine">
+                      {task.liveTechniques}
+                    </p>
+                    <p className="font-mono text-[10px] text-ink-400">已生成技巧</p>
+                  </div>
+                </div>
+
+                {/* 最近生成的题目预览 */}
+                {task.recentQuestions.length > 0 && (
+                  <div className="mt-3 space-y-2 border-t border-amber/20 pt-3">
+                    <p className="font-mono text-[10px] text-ink-400">
+                      最近生成（{task.recentQuestions.length} 条预览）
+                    </p>
+                    {task.recentQuestions.slice(0, 5).map((q, idx) => (
+                      <motion.div
+                        key={q.id}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.05 }}
+                        className="rounded-sm border border-ink-200/40 bg-parchment-50/50 p-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-sm bg-amber/15 px-1.5 py-0.5 font-mono text-[9px] text-amber-dark">
+                            {QUESTION_TYPE_LABEL[q.type]}
+                          </span>
+                          <span className="font-mono text-[9px] text-ink-400">
+                            {q.knowledgePoint}
+                          </span>
+                        </div>
+                        <p className="mt-1 font-serif text-[11px] leading-relaxed text-ink-700 line-clamp-2">
+                          {q.stem}
+                        </p>
+                      </motion.div>
+                    ))}
+                    {task.recentQuestions.length > 5 && (
+                      <p className="text-center font-mono text-[10px] text-ink-400">
+                        还有 {task.recentQuestions.length - 5} 条，点击「查看题库」浏览全部
+                      </p>
+                    )}
+                  </div>
+                )}
               </motion.div>
             )}
 

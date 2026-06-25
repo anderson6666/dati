@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type {
   ApiConfig,
+  CollectStage,
+  CollectTaskState,
   Exam,
   PracticeProgress,
   Question,
@@ -28,6 +30,9 @@ interface QuestionBankState {
   // 当前选中
   currentExamId: string | null;
 
+  // 后台采集任务（内存态，不持久化）
+  collectTask: CollectTaskState;
+
   // Actions
   setCurrentExam: (examId: string | null) => void;
   addExam: (exam: Exam) => void;
@@ -38,6 +43,19 @@ interface QuestionBankState {
   setApiConfig: (config: Partial<ApiConfig>) => void;
   addQuestions: (qs: Question[]) => void;
   addTechniques: (ts: Technique[]) => void;
+
+  // 采集任务 Actions
+  setCollectTask: (partial: Partial<CollectTaskState>) => void;
+  resetCollectTask: () => void;
+  updateCollectStage: (idx: number, status: CollectStage["status"], detail?: string) => void;
+  /** 增量写入题目：同时加入题库、recentQuestions 预览、递增计数器 */
+  addLiveQuestions: (qs: Question[]) => void;
+  /** 增量写入技巧：同时加入题库、递增计数器 */
+  addLiveTechniques: (ts: Technique[]) => void;
+  /** 递增素材计数 */
+  addLivePosts: (n: number) => void;
+  /** 标记某个关键词已完成 */
+  markKeywordDone: (kw: string) => void;
 
   // 派生查询
   getQuestionsByExam: (examId: string) => Question[];
@@ -68,6 +86,23 @@ export const useStore = create<QuestionBankState>()(
         agnesEndpoint: "https://apihub.agnes-ai.com/v1",
       },
       currentExamId: null,
+
+      // 后台采集任务初始状态（idle）
+      collectTask: {
+        status: "idle",
+        keyword: "",
+        examId: null,
+        stages: [],
+        expansion: null,
+        subProgress: null,
+        resultStats: null,
+        error: "",
+        liveQuestions: 0,
+        liveTechniques: 0,
+        livePosts: 0,
+        recentQuestions: [],
+        doneKeywords: [],
+      },
 
       setCurrentExam: (examId) => set({ currentExamId: examId }),
 
@@ -157,6 +192,89 @@ export const useStore = create<QuestionBankState>()(
           const newTs = ts.filter((t) => !existingIds.has(t.id));
           return { techniques: [...state.techniques, ...newTs] };
         }),
+
+      // ============ 采集任务 Actions ============
+      setCollectTask: (partial) =>
+        set((state) => ({
+          collectTask: { ...state.collectTask, ...partial },
+        })),
+
+      resetCollectTask: () =>
+        set({
+          collectTask: {
+            status: "idle",
+            keyword: "",
+            examId: null,
+            stages: [],
+            expansion: null,
+            subProgress: null,
+            resultStats: null,
+            error: "",
+            liveQuestions: 0,
+            liveTechniques: 0,
+            livePosts: 0,
+            recentQuestions: [],
+            doneKeywords: [],
+          },
+        }),
+
+      updateCollectStage: (idx, status, detail) =>
+        set((state) => ({
+          collectTask: {
+            ...state.collectTask,
+            stages: state.collectTask.stages.map((s, i) =>
+              i === idx
+                ? { ...s, status, ...(detail !== undefined ? { detail } : {}) }
+                : s
+            ),
+          },
+        })),
+
+      addLiveQuestions: (qs) =>
+        set((state) => {
+          // 写入题库（去重）
+          const existingIds = new Set(state.questions.map((q) => q.id));
+          const newQs = qs.filter((q) => !existingIds.has(q.id));
+          // 更新预览（新的在前，最多保留 30 条）
+          const recent = [...newQs, ...state.collectTask.recentQuestions].slice(0, 30);
+          return {
+            questions: [...state.questions, ...newQs],
+            collectTask: {
+              ...state.collectTask,
+              liveQuestions: state.collectTask.liveQuestions + newQs.length,
+              recentQuestions: recent,
+            },
+          };
+        }),
+
+      addLiveTechniques: (ts) =>
+        set((state) => {
+          const existingIds = new Set(state.techniques.map((t) => t.id));
+          const newTs = ts.filter((t) => !existingIds.has(t.id));
+          return {
+            techniques: [...state.techniques, ...newTs],
+            collectTask: {
+              ...state.collectTask,
+              liveTechniques: state.collectTask.liveTechniques + newTs.length,
+            },
+          };
+        }),
+
+      addLivePosts: (n) =>
+        set((state) => ({
+          collectTask: {
+            ...state.collectTask,
+            livePosts: state.collectTask.livePosts + n,
+          },
+        })),
+
+      markKeywordDone: (kw) =>
+        set((state) => ({
+          collectTask: {
+            ...state.collectTask,
+            doneKeywords: [...state.collectTask.doneKeywords, kw],
+          },
+        })),
 
       getQuestionsByExam: (examId) =>
         get().questions.filter((q) => q.examId === examId),

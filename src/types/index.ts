@@ -81,6 +81,29 @@ export interface CollectStage {
   detail?: string;
 }
 
+/**
+ * 后台采集任务状态（内存态，不持久化）。
+ * 将采集流程从组件生命周期中解耦，使导航切换页面时不中断、已生成题目不丢失。
+ */
+export interface CollectTaskState {
+  status: "idle" | "running" | "done" | "error";
+  keyword: string;
+  examId: string | null;
+  stages: CollectStage[];
+  expansion: { depth: string[]; breadth: string[]; all: string[] } | null;
+  subProgress: { current: number; total: number; keyword: string } | null;
+  resultStats: { posts: number; questions: number; techniques: number } | null;
+  error: string;
+  /** 实时计数器（随每个关键词完成递增） */
+  liveQuestions: number;
+  liveTechniques: number;
+  livePosts: number;
+  /** 最近生成的题目预览（最多保留 30 条，新的在前） */
+  recentQuestions: Question[];
+  /** 已完成的关键词列表（用于高亮） */
+  doneKeywords: string[];
+}
+
 export const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
   single_choice: "单选题",
   multi_choice: "多选题",
